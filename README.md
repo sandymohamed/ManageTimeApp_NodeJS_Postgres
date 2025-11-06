@@ -47,42 +47,6 @@ A comprehensive backend API for the Manage Time application, built with Node.js,
    ```
 
 3. **Environment Setup**
-   ```bash
-   cp .env.example .env
-   ```
-   
-   Configure the following environment variables in `.env`:
-   ```env
-   # Database
-   DATABASE_URL="postgresql://username:password@localhost:5432/manage_time_db"
-   
-   # Redis
-   REDIS_URL="redis://localhost:6379"
-   
-   # JWT
-   JWT_SECRET="your-jwt-secret-key-here"
-   JWT_REFRESH_SECRET="your-jwt-refresh-secret-key-here"
-   JWT_EXPIRES_IN="15m"
-   JWT_REFRESH_EXPIRES_IN="7d"
-   
-   # OpenAI
-   OPENAI_API_KEY="your-openai-api-key-here"
-   
-   # Server
-   PORT=3000
-   NODE_ENV="development"
-   CORS_ORIGIN="http://localhost:3000,http://localhost:3001"
-   
-   # Rate Limiting
-   RATE_LIMIT_WINDOW_MS=900000
-   RATE_LIMIT_MAX_REQUESTS=100
-   
-   # AWS (optional)
-   AWS_ACCESS_KEY_ID="your-aws-access-key-id-here"
-   AWS_SECRET_ACCESS_KEY="your-aws-secret-access-key-here"
-   AWS_REGION="us-east-1"
-   AWS_S3_BUCKET="your-s3-bucket-name-here"
-   ```
 
 4. **Database Setup**
    ```bash
