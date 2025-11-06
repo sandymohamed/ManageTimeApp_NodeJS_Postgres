@@ -1,0 +1,96 @@
+import { Router, Request, Response } from 'express';
+import Joi from 'joi';
+import { notificationService } from '../services/notificationService';
+import { AuthenticatedRequest } from '../types';
+import { authenticateToken } from '../middleware/auth';
+
+const router = Router();
+
+// Apply authentication middleware to all routes
+router.use(authenticateToken);
+
+// GET /api/v1/notifications - Get user notifications
+router.get('/', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const notifications = await notificationService.getUserNotifications(userId);
+
+    res.json({
+      success: true,
+      data: notifications,
+    });
+  } catch (error: any) {
+    console.error('Get notifications error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get notifications',
+      error: error.message,
+    });
+  }
+});
+
+// GET /api/v1/notifications/unread-count - Get unread notification count
+router.get('/unread-count', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    console.log('req.user', req.user);
+    const userId = req.user!.id;
+    console.log('userId', userId);
+    const count = await notificationService.getUnreadNotificationCount(userId);
+
+    res.json({
+      success: true,
+      data: { count },
+    });
+  } catch (error: any) {
+    console.error('Get unread count error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get unread count',
+      error: error.message,
+    });
+  }
+});
+
+// PUT /api/v1/notifications/:id/read - Mark notification as read
+router.put('/:id/read', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    await notificationService.markNotificationAsRead(id);
+
+    res.json({
+      success: true,
+      message: 'Notification marked as read',
+    });
+  } catch (error: any) {
+    console.error('Mark notification as read error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to mark notification as read',
+      error: error.message,
+    });
+  }
+});
+
+// DELETE /api/v1/notifications/:id - Delete notification
+router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    await notificationService.deleteNotification(id);
+
+    res.json({
+      success: true,
+      message: 'Notification deleted',
+    });
+  } catch (error: any) {
+    console.error('Delete notification error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete notification',
+      error: error.message,
+    });
+  }
+});
+
+export default router;

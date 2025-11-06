@@ -1,0 +1,17 @@
+node_modules
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+logs/*
+
+# Firebase credentials
+*-firebase-adminsdk-*.json
+*firebase*service-account*.json
+*service-account*.json
+google-services.json
+GoogleService-Info.plist
+*taskmanager-firebase-adminsdk-*.json
+
+*.zip

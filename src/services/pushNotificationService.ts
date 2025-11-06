@@ -1,0 +1,236 @@
+import admin from 'firebase-admin';
+import { logger } from '../utils/logger';
+import { getPrismaClient } from '../utils/database';
+
+// Initialize Firebase Admin SDK
+// Note: This requires service account credentials
+// Place your firebase-service-account.json in the backend root directory
+// Or set GOOGLE_APPLICATION_CREDENTIALS environment variable
+let firebaseInitialized = false;
+
+function initializeFirebase(): void {
+  if (firebaseInitialized) {
+    return;
+  }
+
+  try {
+    // Check if Firebase is already initialized
+    if (admin.apps.length === 0) {
+      // Try to initialize from environment variable or service account file
+      const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+      logger.info('serviceAccountPath', serviceAccountPath);
+      logger.info('FIREBASE_PROJECT_ID', process.env.FIREBASE_PROJECT_ID);
+      logger.info('FIREBASE_PRIVATE_KEY', process.env.FIREBASE_PRIVATE_KEY);
+      logger.info('FIREBASE_CLIENT_EMAIL', process.env.FIREBASE_CLIENT_EMAIL);
+
+      if (serviceAccountPath) {
+        logger.info('Initializing Firebase Admin SDK from service account path');
+        const serviceAccount = require(serviceAccountPath);
+        admin.initializeApp({
+          credential: admin.credential.cert(serviceAccount),
+        });
+      } else if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_PRIVATE_KEY) {
+        // Initialize from environment variables
+        admin.initializeApp({
+          credential: admin.credential.cert({
+            projectId: process.env.FIREBASE_PROJECT_ID,
+            privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+            clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          }),
+        });
+      } else {
+        logger.warn('Firebase Admin SDK not initialized. Push notifications will not work.');
+        logger.warn('Set GOOGLE_APPLICATION_CREDENTIALS or FIREBASE_* environment variables.');
+        return;
+      }
+    }
+
+    firebaseInitialized = true;
+    logger.info('Firebase Admin SDK initialized successfully');
+  } catch (error) {
+    logger.error('Failed to initialize Firebase Admin SDK:', error);
+  }
+}
+
+interface PushNotificationPayload {
+  title: string;
+  body: string;
+  data?: any;
+  sound?: string;
+  badge?: number;
+}
+
+interface UserPushToken {
+  token: string;
+  platform: 'android' | 'ios';
+  registeredAt: Date;
+}
+
+class PushNotificationService {
+  private static instance: PushNotificationService;
+
+  private constructor() {
+    initializeFirebase();
+    logger.info('PushNotificationService initialized');
+  }
+
+  static getInstance(): PushNotificationService {
+    if (!PushNotificationService.instance) {
+      PushNotificationService.instance = new PushNotificationService();
+    }
+    return PushNotificationService.instance;
+  }
+
+  /**
+   * Get user's push tokens from database
+   */
+  async getUserPushTokens(userId: string): Promise<UserPushToken[]> {
+    console.log('getUserPushTokens', userId);
+    try {
+      const prisma = getPrismaClient();
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { settings: true },
+      });
+
+      if (!user?.settings) {
+        return [];
+      }
+
+      const settings = user.settings as any;
+      const pushTokens = settings.pushTokens || [];
+      console.log('pushTokens', pushTokens);
+      return pushTokens.filter((token: UserPushToken) => {
+        // Filter out expired tokens (older than 30 days)
+        const registeredAt = new Date(token.registeredAt);
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        return registeredAt > thirtyDaysAgo;
+      });
+    } catch (error) {
+      logger.error('Failed to get user push tokens:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Send push notification to user
+   */
+  async sendPushNotification(
+    userId: string,
+    payload: PushNotificationPayload,
+    checkPreferences: boolean = true
+  ): Promise<boolean> {
+    try {
+      if (!firebaseInitialized || !admin.apps.length) {
+        logger.warn('Firebase not initialized, cannot send push notification');
+        return false;
+      }
+
+      // Check user notification preferences if requested
+      if (checkPreferences) {
+        const prisma = getPrismaClient();
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { settings: true },
+        });
+
+        const settings = (user?.settings as any) || {};
+        const notificationSettings = settings.notifications || {};
+
+        // Check if push notifications are enabled
+        if (notificationSettings.pushNotifications === false) {
+          logger.info(`Push notifications disabled for user ${userId}`);
+          return false;
+        }
+      }
+
+      // Get user's push tokens
+      const tokens = await this.getUserPushTokens(userId);
+
+      if (tokens.length === 0) {
+        logger.warn(`No push tokens found for user ${userId}`);
+        return false;
+      }
+
+      // Prepare FCM messages
+      const messages = tokens.map((tokenInfo: UserPushToken) => {
+        const message: admin.messaging.Message = {
+          token: tokenInfo.token,
+          notification: {
+            title: payload.title,
+            body: payload.body,
+          },
+          data: payload.data || {},
+          android: {
+            priority: 'high' as const,
+            notification: {
+              sound: payload.sound || 'default',
+              channelId: 'default-channel-id',
+            },
+          },
+          apns: {
+            payload: {
+              aps: {
+                sound: payload.sound || 'default',
+                badge: payload.badge,
+              },
+            },
+          },
+        };
+
+        return message;
+      });
+
+      // Send notifications - use sendEach for compatibility
+      const messaging = admin.messaging();
+      let successCount = 0;
+
+      for (let i = 0; i < messages.length; i++) {
+        try {
+          await messaging.send(messages[i]);
+          successCount++;
+        } catch (error: any) {
+          logger.error(`Failed to send push notification to token ${tokens[i].token}:`, error);
+        }
+      }
+
+      logger.info(`Sent ${successCount} push notifications to user ${userId}`);
+      return successCount > 0;
+    } catch (error) {
+      logger.error('Failed to send push notification:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Send push notification to multiple users
+   */
+  async sendPushNotificationToUsers(
+    userIds: string[],
+    payload: PushNotificationPayload,
+    checkPreferences: boolean = true
+  ): Promise<number> {
+    let successCount = 0;
+
+    for (const userId of userIds) {
+      const success = await this.sendPushNotification(userId, payload, checkPreferences);
+      if (success) {
+        successCount++;
+      }
+    }
+
+    return successCount;
+  }
+
+  /**
+   * Check if push notifications are available
+   */
+  isAvailable(): boolean {
+    return firebaseInitialized && admin.apps.length > 0;
+  }
+}
+
+export const pushNotificationService = PushNotificationService.getInstance();
+

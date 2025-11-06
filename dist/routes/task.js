@@ -1,0 +1,645 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const joi_1 = __importDefault(require("joi"));
+const database_1 = require("../utils/database");
+const auth_1 = require("../middleware/auth");
+const types_1 = require("../types");
+const logger_1 = require("../utils/logger");
+const router = (0, express_1.Router)();
+router.use(auth_1.authenticateToken);
+const createTaskSchema = joi_1.default.object({
+    title: joi_1.default.string().min(1).max(255).required(),
+    description: joi_1.default.string().max(1000).optional(),
+    assigneeId: joi_1.default.string().uuid().allow(null).optional(),
+    projectId: joi_1.default.string().uuid().allow(null).optional(),
+    goalId: joi_1.default.string().uuid().allow(null).optional(),
+    milestoneId: joi_1.default.string().uuid().allow(null).optional(),
+    priority: joi_1.default.string().valid('LOW', 'MEDIUM', 'HIGH', 'URGENT').optional(),
+    status: joi_1.default.string().valid('TODO', 'IN_PROGRESS', 'DONE', 'ARCHIVED').optional(),
+    dueDate: joi_1.default.date().allow(null).optional(),
+    dueTime: joi_1.default.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).allow(null).optional(),
+    recurrenceRule: joi_1.default.string().allow(null).optional(),
+    metadata: joi_1.default.object().optional(),
+});
+const updateTaskSchema = joi_1.default.object({
+    title: joi_1.default.string().min(1).max(255).optional(),
+    description: joi_1.default.string().max(1000).optional(),
+    assigneeId: joi_1.default.string().uuid().allow(null).optional(),
+    projectId: joi_1.default.string().uuid().allow(null).optional(),
+    goalId: joi_1.default.string().uuid().allow(null).optional(),
+    milestoneId: joi_1.default.string().uuid().allow(null).optional(),
+    priority: joi_1.default.string().valid('LOW', 'MEDIUM', 'HIGH', 'URGENT').optional(),
+    status: joi_1.default.string().valid('TODO', 'IN_PROGRESS', 'DONE', 'ARCHIVED').optional(),
+    dueDate: joi_1.default.date().allow(null).optional(),
+    dueTime: joi_1.default.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).allow(null).optional(),
+    recurrenceRule: joi_1.default.string().allow(null).optional(),
+    metadata: joi_1.default.object().optional(),
+});
+const reorderTasksSchema = joi_1.default.object({
+    taskOrders: joi_1.default.array().items(joi_1.default.object({
+        id: joi_1.default.string().uuid().required(),
+        order: joi_1.default.number().integer().min(0).required(),
+    })).min(1).required(),
+});
+router.get('/', async (req, res) => {
+    try {
+        const { page = 1, limit = 20, search, status, priority, projectId, goalId, assigneeId } = req.query;
+        const userId = req.user.id;
+        const prisma = (0, database_1.getPrismaClient)();
+        const where = {
+            AND: [
+                {
+                    OR: [
+                        { creatorId: userId },
+                        { assigneeId: userId },
+                        { project: { members: { some: { userId } } } },
+                    ],
+                },
+            ],
+        };
+        if (search) {
+            where.AND.push({
+                OR: [
+                    { title: { contains: search, mode: 'insensitive' } },
+                    { description: { contains: search, mode: 'insensitive' } },
+                ],
+            });
+        }
+        if (status) {
+            where.status = status;
+        }
+        if (priority) {
+            where.priority = priority;
+        }
+        if (projectId) {
+            where.projectId = projectId;
+        }
+        if (goalId) {
+            where.goalId = goalId;
+        }
+        if (assigneeId) {
+            where.assigneeId = assigneeId;
+        }
+        const [tasks, total] = await Promise.all([
+            prisma.task.findMany({
+                where,
+                include: {
+                    creator: {
+                        select: { id: true, name: true, email: true },
+                    },
+                    assignee: {
+                        select: { id: true, name: true, email: true },
+                    },
+                    project: {
+                        select: { id: true, title: true },
+                    },
+                    goal: {
+                        select: { id: true, title: true },
+                    },
+                    milestone: {
+                        select: { id: true, title: true },
+                    },
+                },
+                orderBy: { order: 'asc' },
+                skip: (Number(page) - 1) * Number(limit),
+                take: Number(limit),
+            }),
+            prisma.task.count({ where }),
+        ]);
+        const { routineService } = await Promise.resolve().then(() => __importStar(require('../services/routineService')));
+        const routineTasks = await routineService.getRoutineTasksAsTasks(userId);
+        let allTasks = [...tasks, ...routineTasks];
+        if (status) {
+            allTasks = allTasks.filter(t => t.status === status);
+        }
+        if (priority) {
+            allTasks = allTasks.filter(t => t.priority === priority);
+        }
+        if (search) {
+            const searchLower = search.toLowerCase();
+            allTasks = allTasks.filter(t => t.title.toLowerCase().includes(searchLower) ||
+                (t.description && t.description.toLowerCase().includes(searchLower)));
+        }
+        allTasks.sort((a, b) => (a.order || 0) - (b.order || 0));
+        const paginatedTasks = allTasks.slice((Number(page) - 1) * Number(limit), Number(page) * Number(limit));
+        res.json({
+            success: true,
+            data: paginatedTasks,
+            pagination: {
+                page: Number(page),
+                limit: Number(limit),
+                total: allTasks.length,
+                totalPages: Math.ceil(allTasks.length / Number(limit)),
+            },
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Failed to get tasks:', error);
+        throw error;
+    }
+});
+router.get('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user.id;
+        const prisma = (0, database_1.getPrismaClient)();
+        const task = await prisma.task.findFirst({
+            where: {
+                id,
+                OR: [
+                    { creatorId: userId },
+                    { assigneeId: userId },
+                    { project: { members: { some: { userId } } } },
+                ],
+            },
+            include: {
+                creator: {
+                    select: { id: true, name: true, email: true },
+                },
+                assignee: {
+                    select: { id: true, name: true, email: true },
+                },
+                project: {
+                    select: { id: true, title: true },
+                },
+                goal: {
+                    select: { id: true, title: true },
+                },
+                milestone: {
+                    select: { id: true, title: true },
+                },
+            },
+        });
+        if (!task) {
+            throw new types_1.NotFoundError('Task');
+        }
+        res.json({
+            success: true,
+            data: task,
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Failed to get task:', error);
+        throw error;
+    }
+});
+router.post('/', async (req, res) => {
+    try {
+        const { error, value } = createTaskSchema.validate(req.body);
+        if (error) {
+            throw new types_1.ValidationError(error.details[0].message);
+        }
+        const userId = req.user.id;
+        const prisma = (0, database_1.getPrismaClient)();
+        if (value.projectId) {
+            const project = await prisma.project.findFirst({
+                where: {
+                    id: value.projectId,
+                    OR: [
+                        { ownerId: userId },
+                        { members: { some: { userId } } },
+                    ],
+                },
+            });
+            if (!project) {
+                throw new types_1.AuthorizationError('You do not have access to this project');
+            }
+        }
+        if (value.goalId) {
+            const goal = await prisma.goal.findFirst({
+                where: {
+                    id: value.goalId,
+                    userId,
+                },
+            });
+            if (!goal) {
+                throw new types_1.AuthorizationError('You do not have access to this goal');
+            }
+        }
+        const lastTask = await prisma.task.findFirst({
+            where: {
+                OR: [
+                    { creatorId: userId },
+                    { assigneeId: userId },
+                    { project: { members: { some: { userId } } } },
+                ],
+            },
+            orderBy: { order: 'desc' },
+            select: { order: true },
+        });
+        const nextOrder = (lastTask?.order || 0) + 1;
+        const task = await prisma.task.create({
+            data: {
+                ...value,
+                creatorId: userId,
+                order: nextOrder,
+            },
+            include: {
+                creator: {
+                    select: { id: true, name: true, email: true },
+                },
+                assignee: {
+                    select: { id: true, name: true, email: true },
+                },
+                project: {
+                    select: { id: true, title: true },
+                },
+                goal: {
+                    select: { id: true, title: true },
+                },
+                milestone: {
+                    select: { id: true, title: true },
+                },
+            },
+        });
+        res.status(201).json({
+            success: true,
+            data: task,
+            message: 'Task created successfully',
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Failed to create task:', error);
+        throw error;
+    }
+});
+router.put('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { error, value } = updateTaskSchema.validate(req.body);
+        if (error) {
+            throw new types_1.ValidationError(error.details[0].message);
+        }
+        const userId = req.user.id;
+        const prisma = (0, database_1.getPrismaClient)();
+        if (id.startsWith('routine_')) {
+            const routineTaskId = id.replace('routine_', '').split('_day_')[0];
+            const { routineService } = await Promise.resolve().then(() => __importStar(require('../services/routineService')));
+            if (value.status === 'DONE') {
+                await routineService.toggleTaskCompletion(routineTaskId, userId, true);
+            }
+            else if (value.status === 'TODO') {
+                await routineService.toggleTaskCompletion(routineTaskId, userId, false);
+            }
+            const routineTasks = await routineService.getRoutineTasksAsTasks(userId);
+            const updatedTask = routineTasks.find(t => t.id === id);
+            if (!updatedTask) {
+                throw new types_1.NotFoundError('Task');
+            }
+            logger_1.logger.info('Routine task updated successfully', { taskId: id, userId });
+            return res.json({
+                success: true,
+                data: updatedTask,
+                message: 'Task updated successfully',
+            });
+        }
+        const existingTask = await prisma.task.findFirst({
+            where: {
+                id,
+                OR: [
+                    { creatorId: userId },
+                    { assigneeId: userId },
+                    { project: { members: { some: { userId, role: { in: ['OWNER', 'EDITOR'] } } } } },
+                ],
+            },
+        });
+        if (!existingTask) {
+            throw new types_1.NotFoundError('Task');
+        }
+        const task = await prisma.task.update({
+            where: { id },
+            data: value,
+            include: {
+                creator: {
+                    select: { id: true, name: true, email: true },
+                },
+                assignee: {
+                    select: { id: true, name: true, email: true },
+                },
+                project: {
+                    select: { id: true, title: true },
+                },
+                goal: {
+                    select: { id: true, title: true },
+                },
+                milestone: {
+                    select: { id: true, title: true },
+                },
+            },
+        });
+        logger_1.logger.info('Task updated successfully', { taskId: id, userId });
+        return res.json({
+            success: true,
+            data: task,
+            message: 'Task updated successfully',
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Failed to update task:', error);
+        throw error;
+    }
+});
+router.delete('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user.id;
+        const prisma = (0, database_1.getPrismaClient)();
+        const task = await prisma.task.findFirst({
+            where: {
+                id,
+                OR: [
+                    { creatorId: userId },
+                    { project: { members: { some: { userId, role: { in: ['OWNER', 'EDITOR'] } } } } },
+                ],
+            },
+        });
+        if (!task) {
+            throw new types_1.NotFoundError('Task');
+        }
+        await prisma.task.delete({
+            where: { id },
+        });
+        logger_1.logger.info('Task deleted successfully', { taskId: id, userId });
+        res.json({
+            success: true,
+            message: 'Task deleted successfully',
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Failed to delete task:', error);
+        throw error;
+    }
+});
+router.post('/:id/assign', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { assigneeId } = req.body;
+        const userId = req.user.id;
+        const prisma = (0, database_1.getPrismaClient)();
+        const task = await prisma.task.findFirst({
+            where: {
+                id,
+                OR: [
+                    { creatorId: userId },
+                    { project: { members: { some: { userId, role: { in: ['OWNER', 'EDITOR'] } } } } },
+                ],
+            },
+        });
+        if (!task) {
+            throw new types_1.NotFoundError('Task');
+        }
+        const updatedTask = await prisma.task.update({
+            where: { id },
+            data: { assigneeId },
+            include: {
+                creator: {
+                    select: { id: true, name: true, email: true },
+                },
+                assignee: {
+                    select: { id: true, name: true, email: true },
+                },
+                project: {
+                    select: { id: true, title: true },
+                },
+                goal: {
+                    select: { id: true, title: true },
+                },
+                milestone: {
+                    select: { id: true, title: true },
+                },
+            },
+        });
+        logger_1.logger.info('Task assigned successfully', { taskId: id, assigneeId, userId });
+        res.json({
+            success: true,
+            data: updatedTask,
+            message: 'Task assigned successfully',
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Failed to assign task:', error);
+        throw error;
+    }
+});
+router.patch('/reorder', async (req, res) => {
+    try {
+        const { error, value } = reorderTasksSchema.validate(req.body);
+        if (error) {
+            throw new types_1.ValidationError(error.details[0].message);
+        }
+        const { taskOrders } = value;
+        const userId = req.user.id;
+        const prisma = (0, database_1.getPrismaClient)();
+        const taskIds = taskOrders.map((to) => to.id).filter((id) => id !== null);
+        const userTasks = await prisma.task.findMany({
+            where: {
+                id: { in: taskIds },
+                OR: [
+                    { creatorId: userId },
+                    { assigneeId: userId },
+                    { project: { members: { some: { userId } } } },
+                ],
+            },
+            select: { id: true },
+        });
+        if (userTasks.length !== taskIds.length) {
+            throw new types_1.AuthorizationError('You do not have access to reorder some of these tasks');
+        }
+        await prisma.$transaction(taskOrders.map((taskOrder) => prisma.task.update({
+            where: { id: taskOrder.id },
+            data: { order: taskOrder.order },
+        })));
+        logger_1.logger.info('Tasks reordered successfully', {
+            userId,
+            taskCount: taskOrders.length,
+            taskIds: taskIds
+        });
+        res.json({
+            success: true,
+            message: 'Tasks reordered successfully',
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Failed to reorder tasks:', error);
+        throw error;
+    }
+});
+router.patch('/:id/complete', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user.id;
+        const prisma = (0, database_1.getPrismaClient)();
+        if (id.startsWith('routine_')) {
+            const routineTaskId = id.replace('routine_', '').split('_day_')[0];
+            const { routineService } = await Promise.resolve().then(() => __importStar(require('../services/routineService')));
+            await routineService.toggleTaskCompletion(routineTaskId, userId, true);
+            const routineTasks = await routineService.getRoutineTasksAsTasks(userId);
+            const updatedTask = routineTasks.find(t => t.id === id);
+            if (!updatedTask) {
+                throw new types_1.NotFoundError('Task');
+            }
+            logger_1.logger.info('Routine task completed successfully', { taskId: id, userId });
+            return res.json({
+                success: true,
+                data: updatedTask,
+                message: 'Task completed successfully',
+            });
+        }
+        const task = await prisma.task.findFirst({
+            where: {
+                id,
+                OR: [
+                    { creatorId: userId },
+                    { assigneeId: userId },
+                    { project: { members: { some: { userId } } } },
+                ],
+            },
+        });
+        if (!task) {
+            throw new types_1.NotFoundError('Task');
+        }
+        const updatedTask = await prisma.task.update({
+            where: { id },
+            data: {
+                status: 'DONE',
+                completedAt: new Date(),
+            },
+            include: {
+                creator: {
+                    select: { id: true, name: true, email: true },
+                },
+                assignee: {
+                    select: { id: true, name: true, email: true },
+                },
+                project: {
+                    select: { id: true, title: true },
+                },
+                goal: {
+                    select: { id: true, title: true },
+                },
+                milestone: {
+                    select: { id: true, title: true },
+                },
+            },
+        });
+        logger_1.logger.info('Task completed successfully', { taskId: id, userId });
+        return res.json({
+            success: true,
+            data: updatedTask,
+            message: 'Task completed successfully',
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Failed to complete task:', error);
+        throw error;
+    }
+});
+router.patch('/:id/uncomplete', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user.id;
+        const prisma = (0, database_1.getPrismaClient)();
+        if (id.startsWith('routine_')) {
+            const routineTaskId = id.replace('routine_', '').split('_day_')[0];
+            const { routineService } = await Promise.resolve().then(() => __importStar(require('../services/routineService')));
+            await routineService.toggleTaskCompletion(routineTaskId, userId, false);
+            const routineTasks = await routineService.getRoutineTasksAsTasks(userId);
+            const updatedTask = routineTasks.find(t => t.id === id);
+            if (!updatedTask) {
+                throw new types_1.NotFoundError('Task');
+            }
+            logger_1.logger.info('Routine task uncompleted successfully', { taskId: id, userId });
+            return res.json({
+                success: true,
+                data: updatedTask,
+                message: 'Task uncompleted successfully',
+            });
+        }
+        const task = await prisma.task.findFirst({
+            where: {
+                id,
+                OR: [
+                    { creatorId: userId },
+                    { assigneeId: userId },
+                    { project: { members: { some: { userId } } } },
+                ],
+            },
+        });
+        if (!task) {
+            throw new types_1.NotFoundError('Task');
+        }
+        const updatedTask = await prisma.task.update({
+            where: { id },
+            data: {
+                status: 'TODO',
+                completedAt: null,
+            },
+            include: {
+                creator: {
+                    select: { id: true, name: true, email: true },
+                },
+                assignee: {
+                    select: { id: true, name: true, email: true },
+                },
+                project: {
+                    select: { id: true, title: true },
+                },
+                goal: {
+                    select: { id: true, title: true },
+                },
+                milestone: {
+                    select: { id: true, title: true },
+                },
+            },
+        });
+        logger_1.logger.info('Task uncompleted successfully', { taskId: id, userId });
+        return res.json({
+            success: true,
+            data: updatedTask,
+            message: 'Task uncompleted successfully',
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Failed to uncomplete task:', error);
+        throw error;
+    }
+});
+exports.default = router;
+//# sourceMappingURL=task.js.map
