@@ -60,13 +60,13 @@ A comprehensive backend API for the Manage Time application, built with Node.js,
    REDIS_URL="redis://localhost:6379"
    
    # JWT
-   JWT_SECRET="your-super-secret-jwt-key"
-   JWT_REFRESH_SECRET="your-super-secret-refresh-key"
+   JWT_SECRET="your-jwt-secret-key-here"
+   JWT_REFRESH_SECRET="your-jwt-refresh-secret-key-here"
    JWT_EXPIRES_IN="15m"
    JWT_REFRESH_EXPIRES_IN="7d"
    
    # OpenAI
-   OPENAI_API_KEY="your-openai-api-key"
+   OPENAI_API_KEY="your-openai-api-key-here"
    
    # Server
    PORT=3000
@@ -78,10 +78,10 @@ A comprehensive backend API for the Manage Time application, built with Node.js,
    RATE_LIMIT_MAX_REQUESTS=100
    
    # AWS (optional)
-   AWS_ACCESS_KEY_ID="your-aws-access-key"
-   AWS_SECRET_ACCESS_KEY="your-aws-secret-key"
+   AWS_ACCESS_KEY_ID="your-aws-access-key-id-here"
+   AWS_SECRET_ACCESS_KEY="your-aws-secret-access-key-here"
    AWS_REGION="us-east-1"
-   AWS_S3_BUCKET="your-s3-bucket"
+   AWS_S3_BUCKET="your-s3-bucket-name-here"
    ```
 
 4. **Database Setup**
