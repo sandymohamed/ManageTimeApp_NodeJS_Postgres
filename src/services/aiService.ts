@@ -5,11 +5,13 @@ import { GeneratedPlan, GeneratedMilestone, GeneratedTask } from '../types';
 class AIService {
   private static instance: AIService;
   private openai: OpenAI;
+  private model: string;
 
   constructor() {
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
+    this.model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
   }
 
   static getInstance(): AIService {
@@ -46,7 +48,7 @@ class AIService {
       });
 
       const response = await this.openai.chat.completions.create({
-        model: 'gpt-4',
+        model: this.model,
         messages: [
           {
             role: 'system',
@@ -69,6 +71,12 @@ class AIService {
       return this.parseResponse(content);
     } catch (error) {
       logger.error('Failed to generate AI plan:', error);
+
+      if ((error as any)?.code === 'model_not_found' || (error as any)?.status === 404) {
+        const fallbackMessage = `OpenAI model "${this.model}" is unavailable. Set OPENAI_MODEL to a valid model (e.g. "gpt-4o-mini") or verify your API access.`;
+        throw new Error(fallbackMessage);
+      }
+
       throw error;
     }
   }
