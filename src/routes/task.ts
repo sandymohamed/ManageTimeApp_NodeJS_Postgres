@@ -312,9 +312,10 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
       },
     });
 
+    const notificationScheduler = await import('../services/notificationScheduler');
+
     // Schedule notifications for due date if provided
     if (task.dueDate) {
-      const { scheduleTaskDueDateNotifications } = await import('../services/notificationScheduler');
       const taskUserId = task.assigneeId || task.creatorId;
       const dueTime = value.dueTime || task.dueTime || null;
       logger.info('Scheduling task notifications', { 
@@ -323,15 +324,22 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
         dueDate: task.dueDate, 
         dueTime 
       });
-      scheduleTaskDueDateNotifications(task.id, taskUserId, task.dueDate, task.title, dueTime)
+      notificationScheduler.scheduleTaskDueDateNotifications(task.id, taskUserId, task.dueDate, task.title, dueTime)
         .catch(err => logger.error('Failed to schedule task notifications:', err));
     }
 
+    // Send push notification to creator for task creation (testing)
+    notificationScheduler.sendTaskCreatedNotification(
+      task.id,
+      userId,
+      task.title,
+      { projectTitle: task.project?.title || undefined }
+    ).catch(err => logger.error('Failed to send task created notification:', err));
+
     // Send assignment notification if task is assigned
     if (task.assigneeId && task.assigneeId !== userId) {
-      const { sendTaskAssignmentNotification } = await import('../services/notificationScheduler');
       const creator = task.creator;
-      sendTaskAssignmentNotification(
+      notificationScheduler.sendTaskAssignmentNotification(
         task.id,
         task.assigneeId,
         task.title,

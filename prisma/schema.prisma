@@ -250,7 +250,6 @@ model Reminder {
 
   // Relations
   user      User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  linkedTask Task? @relation(fields: [targetId], references: [id], onDelete: Cascade)
 
   @@map("reminders")
 }

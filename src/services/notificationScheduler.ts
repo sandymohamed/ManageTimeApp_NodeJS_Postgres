@@ -4,6 +4,12 @@ import { scheduleReminder } from './queueService';
 import { scheduleNotification } from './queueService';
 import { notificationService } from './notificationService';
 
+const IMMEDIATE_NOTIFICATION_DELAY_MS = 1000;
+
+function getImmediateScheduleTime(delayMs: number = IMMEDIATE_NOTIFICATION_DELAY_MS): Date {
+  return new Date(Date.now() + Math.max(delayMs, 0));
+}
+
 /**
  * Schedule notifications for task due dates
  * Creates reminders for: 1 day before, 1 hour before, and at due time
@@ -403,7 +409,7 @@ export async function sendTaskAssignmentNotification(
     await scheduleNotification(
       notification.id,
       assigneeId,
-      new Date(),
+      getImmediateScheduleTime(),
       'TASK_ASSIGNMENT',
       {
         title: `New Task Assigned: ${taskTitle}`,
@@ -416,6 +422,55 @@ export async function sendTaskAssignmentNotification(
     logger.info(`Sent task assignment notification for task ${taskId} to user ${assigneeId}`);
   } catch (error) {
     logger.error(`Failed to send task assignment notification for ${taskId}:`, error);
+  }
+}
+
+/**
+ * Send notification when a task is created.
+ * Primarily used for testing push notification flow.
+ */
+export async function sendTaskCreatedNotification(
+  taskId: string,
+  userId: string,
+  taskTitle: string,
+  context?: { projectTitle?: string }
+): Promise<void> {
+  try {
+    const prisma = getPrismaClient();
+
+    const notification = await prisma.notification.create({
+      data: {
+        userId,
+        type: 'IN_APP',
+        payload: {
+          taskId,
+          title: `Task Created: ${taskTitle}`,
+          body: context?.projectTitle
+            ? `You created "${taskTitle}" in project ${context.projectTitle}.`
+            : `You created a new task: "${taskTitle}".`,
+          notificationType: 'TASK_CREATED',
+        },
+        scheduledFor: new Date(),
+        status: 'PENDING',
+      },
+    });
+
+    await scheduleNotification(
+      notification.id,
+      userId,
+      getImmediateScheduleTime(),
+      'TASK_CREATED',
+      {
+        title: `Task Created: ${taskTitle}`,
+        body: context?.projectTitle
+          ? `Task "${taskTitle}" was created in ${context.projectTitle}.`
+          : `Task "${taskTitle}" was created successfully.`,
+      }
+    );
+
+    logger.info(`Sent task created notification for task ${taskId} to user ${userId}`);
+  } catch (error) {
+    logger.error(`Failed to send task created notification for ${taskId}:`, error);
   }
 }
 
