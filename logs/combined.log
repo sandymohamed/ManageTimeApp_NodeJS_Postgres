@@ -5514,3 +5514,29 @@
 {"invitationId":"b0179f53-7dfa-4722-9a2f-13e592e2b911","level":"info","message":"Invitation cancelled","service":"manage-time-backend","timestamp":"2025-11-09 20:08:44","userId":"ddc1ba7f-71c7-43cd-8c53-f8ab056638b0"}
 {"invitationId":"edbec106-3a75-4ff2-9320-7574c3e6be44","level":"info","message":"Invitation cancelled","service":"manage-time-backend","timestamp":"2025-11-09 20:09:10","userId":"ddc1ba7f-71c7-43cd-8c53-f8ab056638b0"}
 {"email":"sandysawy@gmail.com","level":"info","message":"User logged in successfully","service":"manage-time-backend","timestamp":"2025-11-09 20:12:27","userId":"ddc1ba7f-71c7-43cd-8c53-f8ab056638b0"}
+{"level":"info","message":"Database connected successfully","service":"manage-time-backend","timestamp":"2025-11-09 20:36:32"}
+{"level":"info","message":"Database connected successfully","service":"manage-time-backend","timestamp":"2025-11-09 20:36:32"}
+{"level":"info","message":"Redis connected successfully","service":"manage-time-backend","timestamp":"2025-11-09 20:36:32"}
+{"level":"info","message":"Redis connected successfully","service":"manage-time-backend","timestamp":"2025-11-09 20:36:32"}
+{"level":"info","message":"All queues and workers initialized","service":"manage-time-backend","timestamp":"2025-11-09 20:36:32"}
+{"level":"info","message":"Job queues initialized","service":"manage-time-backend","timestamp":"2025-11-09 20:36:32"}
+{"level":"info","message":"Server running on port 3000","service":"manage-time-backend","timestamp":"2025-11-09 20:36:32"}
+{"level":"info","message":"Environment: development","service":"manage-time-backend","timestamp":"2025-11-09 20:36:32"}
+{"level":"info","message":"Server accessible at: http://localhost:3000 and http://192.168.1.13:3000","service":"manage-time-backend","timestamp":"2025-11-09 20:36:32"}
+{"error":"Invalid token","ip":"192.168.1.11","level":"warn","message":"Client error:","method":"GET","service":"manage-time-backend","statusCode":401,"timestamp":"2025-11-09 21:29:58","url":"/api/v1/invitations/user/all"}
+{"isOperational":true,"level":"error","message":"Token refresh error: Invalid refresh token","service":"manage-time-backend","stack":"Error: Invalid refresh token\n    at Function.refreshToken (E:\\manage_time_app\\backend\\src\\services\\authService.ts:178:13)\n    at E:\\manage_time_app\\backend\\src\\routes\\auth.ts:101:38\n    at Layer.handle [as handle_request] (E:\\manage_time_app\\backend\\node_modules\\express\\lib\\router\\layer.js:95:5)\n    at next (E:\\manage_time_app\\backend\\node_modules\\express\\lib\\router\\route.js:149:13)\n    at Route.dispatch (E:\\manage_time_app\\backend\\node_modules\\express\\lib\\router\\route.js:119:3)\n    at Layer.handle [as handle_request] (E:\\manage_time_app\\backend\\node_modules\\express\\lib\\router\\layer.js:95:5)\n    at E:\\manage_time_app\\backend\\node_modules\\express\\lib\\router\\index.js:284:15\n    at Function.process_params (E:\\manage_time_app\\backend\\node_modules\\express\\lib\\router\\index.js:346:12)\n    at next (E:\\manage_time_app\\backend\\node_modules\\express\\lib\\router\\index.js:280:10)\n    at Function.handle (E:\\manage_time_app\\backend\\node_modules\\express\\lib\\router\\index.js:175:3)","statusCode":401,"timestamp":"2025-11-09 21:30:00"}
+{"error":"Invalid token","ip":"192.168.1.11","level":"warn","message":"Client error:","method":"GET","service":"manage-time-backend","statusCode":401,"timestamp":"2025-11-09 21:30:30","url":"/api/v1/invitations/user/all"}
+{"error":"Invalid token","ip":"192.168.1.11","level":"warn","message":"Client error:","method":"GET","service":"manage-time-backend","statusCode":401,"timestamp":"2025-11-09 21:30:58","url":"/api/v1/invitations/user/all"}
+{"level":"info","message":"Processing reminder job: b89dee1d-f922-4580-81ff-74c1d549b17a","service":"manage-time-backend","timestamp":"2025-11-09 22:12:01"}
+{"level":"info","message":"serviceAccountPath","service":"manage-time-backend","timestamp":"2025-11-09 22:12:03"}
+{"level":"info","message":"FIREBASE_PROJECT_ID","service":"manage-time-backend","timestamp":"2025-11-09 22:12:03"}
+{"level":"info","message":"FIREBASE_PRIVATE_KEY","service":"manage-time-backend","timestamp":"2025-11-09 22:12:03"}
+{"level":"info","message":"FIREBASE_CLIENT_EMAIL","service":"manage-time-backend","timestamp":"2025-11-09 22:12:03"}
+{"level":"info","message":"Initializing Firebase Admin SDK from service account path","service":"manage-time-backend","timestamp":"2025-11-09 22:12:03"}
+{"level":"info","message":"Firebase Admin SDK initialized successfully","service":"manage-time-backend","timestamp":"2025-11-09 22:12:04"}
+{"level":"info","message":"PushNotificationService initialized","service":"manage-time-backend","timestamp":"2025-11-09 22:12:04"}
+{"level":"info","message":"Sent 1 push notifications to user ddc1ba7f-71c7-43cd-8c53-f8ab056638b0","service":"manage-time-backend","timestamp":"2025-11-09 22:12:06"}
+{"level":"info","message":"Reminder job completed: b89dee1d-f922-4580-81ff-74c1d549b17a","service":"manage-time-backend","timestamp":"2025-11-09 22:12:06"}
+{"level":"info","message":"Processing reminder job: 07c1d00e-a52c-41a3-8b4a-795d6793b723","service":"manage-time-backend","timestamp":"2025-11-09 23:59:00"}
+{"level":"info","message":"Sent 1 push notifications to user ddc1ba7f-71c7-43cd-8c53-f8ab056638b0","service":"manage-time-backend","timestamp":"2025-11-09 23:59:01"}
+{"level":"info","message":"Reminder job completed: 07c1d00e-a52c-41a3-8b4a-795d6793b723","service":"manage-time-backend","timestamp":"2025-11-09 23:59:01"}
