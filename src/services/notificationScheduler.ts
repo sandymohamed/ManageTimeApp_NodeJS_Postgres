@@ -2,13 +2,24 @@ import { getPrismaClient } from '../utils/database';
 import { logger } from '../utils/logger';
 import { scheduleReminder } from './queueService';
 import { scheduleNotification } from './queueService';
-import { notificationService } from './notificationService';
 
 const IMMEDIATE_NOTIFICATION_DELAY_MS = 1000;
 
 function getImmediateScheduleTime(delayMs: number = IMMEDIATE_NOTIFICATION_DELAY_MS): Date {
   return new Date(Date.now() + Math.max(delayMs, 0));
 }
+
+type AlarmLike = {
+  id: string;
+  userId: string;
+  title: string;
+  time: Date;
+  timezone?: string | null;
+  recurrenceRule?: string | null;
+  enabled: boolean;
+};
+
+const ALARM_NOTIFICATION_TYPE = 'ALARM_TRIGGER';
 
 /**
  * Schedule notifications for task due dates
@@ -374,6 +385,113 @@ export async function scheduleGoalTargetDateNotifications(
     }
   } catch (error) {
     logger.error(`Failed to schedule goal target date notifications for ${goalId}:`, error);
+  }
+}
+
+/**
+ * Cancel all scheduled notifications for an alarm.
+ */
+export async function cancelAlarmPushNotifications(alarmId: string, userId: string): Promise<void> {
+  try {
+    const prisma = getPrismaClient();
+
+    const deleted = await prisma.notification.deleteMany({
+      where: {
+        userId,
+        payload: {
+          path: ['alarmId'],
+          equals: alarmId,
+        },
+      },
+    });
+
+    logger.info(`Cancelled ${deleted.count} scheduled notifications for alarm ${alarmId}`);
+  } catch (error) {
+    logger.warn(`Failed to cancel scheduled notifications for alarm ${alarmId}:`, error);
+  }
+}
+
+/**
+ * Schedule a push notification to fire at the alarm time.
+ * Skips scheduling if the alarm is disabled or the time is in the past.
+ */
+export async function scheduleAlarmPushNotification(alarm: AlarmLike): Promise<void> {
+  const now = new Date();
+  const alarmTime = new Date(alarm.time);
+
+  if (!alarm.enabled) {
+    logger.info(`Alarm ${alarm.id} is disabled, skipping push notification scheduling`);
+    await cancelAlarmPushNotifications(alarm.id, alarm.userId);
+    return;
+  }
+
+  if (Number.isNaN(alarmTime.getTime())) {
+    logger.warn(`Invalid alarm time provided for alarm ${alarm.id}, skipping scheduling`);
+    await cancelAlarmPushNotifications(alarm.id, alarm.userId);
+    return;
+  }
+
+  // Add a small buffer (5 seconds) to avoid scheduling jobs that would run immediately
+  if (alarmTime.getTime() <= now.getTime() + 5000) {
+    logger.warn(`Alarm ${alarm.id} time is in the past or too soon (${alarmTime.toISOString()}), skipping scheduling`);
+    await cancelAlarmPushNotifications(alarm.id, alarm.userId);
+    return;
+  }
+
+  const prisma = getPrismaClient();
+
+  // Remove existing scheduled notifications for this alarm before creating new ones
+  await cancelAlarmPushNotifications(alarm.id, alarm.userId);
+
+  const title = `Alarm: ${alarm.title}`;
+  const body = `It's time for "${alarm.title}".`;
+
+  try {
+    const notification = await prisma.notification.create({
+      data: {
+        userId: alarm.userId,
+        type: 'IN_APP',
+        payload: {
+          title,
+          body,
+          alarmId: alarm.id,
+          notificationType: ALARM_NOTIFICATION_TYPE,
+        },
+        scheduledFor: alarmTime,
+        status: 'PENDING',
+      },
+    });
+
+    await scheduleNotification(
+      notification.id,
+      alarm.userId,
+      alarmTime,
+      ALARM_NOTIFICATION_TYPE,
+      {
+        title,
+        body,
+        alarmId: alarm.id,
+        notificationType: ALARM_NOTIFICATION_TYPE,
+      }
+    );
+
+    logger.info(`Scheduled push notification for alarm ${alarm.id} at ${alarmTime.toISOString()}`);
+  } catch (error) {
+    logger.error(`Failed to schedule push notification for alarm ${alarm.id}:`, error);
+    // Clean up notification record if scheduling failed
+    try {
+      await prisma.notification.deleteMany({
+        where: {
+          userId: alarm.userId,
+          payload: {
+            path: ['alarmId'],
+            equals: alarm.id,
+          },
+        },
+      });
+    } catch (cleanupError) {
+      logger.warn(`Failed to clean up notification record for alarm ${alarm.id}:`, cleanupError);
+    }
   }
 }
 

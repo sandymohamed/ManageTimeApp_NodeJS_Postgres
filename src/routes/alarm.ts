@@ -4,6 +4,7 @@ import { getPrismaClient } from '../utils/database';
 import { authenticateToken } from '../middleware/auth';
 import { AuthenticatedRequest, ValidationError, NotFoundError } from '../types';
 import { logger } from '../utils/logger';
+import { scheduleAlarmPushNotification, cancelAlarmPushNotifications } from '../services/notificationScheduler';
 
 const router = Router();
 
@@ -132,6 +133,20 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
 
     logger.info('Alarm created successfully', { alarmId: alarm.id, userId });
 
+    try {
+      await scheduleAlarmPushNotification({
+        id: alarm.id,
+        userId: alarm.userId,
+        title: alarm.title,
+        time: alarm.time,
+        timezone: alarm.timezone,
+        recurrenceRule: alarm.recurrenceRule,
+        enabled: alarm.enabled,
+      });
+    } catch (scheduleError) {
+      logger.error('Failed to schedule alarm push notification', { alarmId: alarm.id, error: scheduleError });
+    }
+
     res.status(201).json({
       success: true,
       data: alarm,
@@ -173,6 +188,20 @@ router.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
 
     logger.info('Alarm updated successfully', { alarmId: id, userId });
 
+    try {
+      await scheduleAlarmPushNotification({
+        id: updatedAlarm.id,
+        userId: updatedAlarm.userId,
+        title: updatedAlarm.title,
+        time: updatedAlarm.time,
+        timezone: updatedAlarm.timezone,
+        recurrenceRule: updatedAlarm.recurrenceRule,
+        enabled: updatedAlarm.enabled,
+      });
+    } catch (scheduleError) {
+      logger.error('Failed to reschedule alarm push notification', { alarmId: id, error: scheduleError });
+    }
+
     res.json({
       success: true,
       data: updatedAlarm,
@@ -212,11 +241,9 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
 
     // Cancel any scheduled notifications
     try {
-      const { notificationService } = await import('../services/notificationService');
-      notificationService.cancelAlarm(id);
+      await cancelAlarmPushNotifications(id, userId);
     } catch (notifError) {
-      // Ignore notification cancellation errors
-      logger.warn('Failed to cancel alarm notification', { alarmId: id, error: notifError });
+      logger.warn('Failed to cancel scheduled alarm notifications', { alarmId: id, error: notifError });
     }
 
     logger.info('Alarm deleted successfully', { alarmId: id, userId });

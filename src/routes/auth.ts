@@ -71,14 +71,11 @@ router.post('/signup', async (req: Request, res: Response) => {
 router.post('/login', async (req: Request, res: Response) => {
   try {
     const { error, value } = loginSchema.validate(req.body);
-    console.log('🔍 Login request:', value);
-    console.log('🔍 Login request   error:', error);
     if (error) {
       throw new ValidationError(error.details[0].message);
     }
 
     const result = await AuthService.login(value);
-    console.log('🔍 Login result:', result);
     res.json({
       success: true,
       data: result,
