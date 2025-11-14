@@ -4,6 +4,7 @@ import { authenticateToken } from '../middleware/auth';
 import { AuthenticatedRequest } from '../types';
 import { logger } from '../utils/logger';
 import { routineService, CreateRoutineData, CreateRoutineTaskData } from '../services/routineService';
+import { scheduleRoutineNotifications, cancelRoutineNotifications, cancelRoutineTaskNotifications, scheduleRoutineTaskNotifications } from '../services/notificationScheduler';
 
 const router = Router();
 
@@ -82,6 +83,12 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     
     const routine = await routineService.createRoutine(userId, value as CreateRoutineData);
     
+    // Schedule notifications for all tasks in the routine
+    if (routine.enabled) {
+      scheduleRoutineNotifications(routine.id, userId)
+        .catch(err => logger.error('Failed to schedule routine notifications:', err));
+    }
+    
     return res.status(201).json({
       success: true,
       data: routine,
@@ -144,6 +151,19 @@ router.put('/:routineId', async (req: AuthenticatedRequest, res: Response) => {
     
     const routine = await routineService.updateRoutine(routineId, userId, value);
     
+    // Reschedule notifications if routine is enabled, otherwise cancel them
+    if (routine.enabled) {
+      // Cancel existing notifications first
+      await cancelRoutineNotifications(routineId, userId);
+      // Schedule new notifications
+      scheduleRoutineNotifications(routineId, userId)
+        .catch(err => logger.error('Failed to schedule routine notifications:', err));
+    } else {
+      // Cancel notifications if routine is disabled
+      cancelRoutineNotifications(routineId, userId)
+        .catch(err => logger.error('Failed to cancel routine notifications:', err));
+    }
+    
     return res.json({
       success: true,
       data: routine,
@@ -164,6 +184,10 @@ router.delete('/:routineId', async (req: AuthenticatedRequest, res: Response) =>
     const { routineId } = req.params;
     
     await routineService.deleteRoutine(routineId, userId);
+    
+    // Cancel all notifications for this routine
+    cancelRoutineNotifications(routineId, userId)
+      .catch(err => logger.error('Failed to cancel routine notifications:', err));
     
     return res.json({
       success: true,
@@ -194,6 +218,23 @@ router.post('/:routineId/tasks', async (req: AuthenticatedRequest, res: Response
     
     const task = await routineService.addTaskToRoutine(routineId, userId, value as CreateRoutineTaskData);
     
+    // Get routine details to schedule notification
+    const routine = await routineService.getRoutineById(routineId, userId);
+    if (routine && routine.enabled) {
+      const schedule = routine.schedule as any;
+      scheduleRoutineTaskNotifications(
+        routineId,
+        userId,
+        routine.title,
+        routine.frequency,
+        schedule,
+        routine.timezone,
+        task.id,
+        task.title,
+        task.reminderTime
+      ).catch(err => logger.error('Failed to schedule routine task notification:', err));
+    }
+    
     return res.status(201).json({
       success: true,
       data: task,
@@ -213,7 +254,46 @@ router.put('/tasks/:taskId', async (req: AuthenticatedRequest, res: Response) =>
     const userId = req.user!.id;
     const { taskId } = req.params;
     
+    // Get task first to get routineId
+    const { getPrismaClient } = await import('../utils/database');
+    const prisma = getPrismaClient();
+    const existingTask = await prisma.routineTask.findUnique({
+      where: { id: taskId },
+      include: { routine: true },
+    });
+    
+    if (!existingTask || existingTask.routine.userId !== userId) {
+      return res.status(404).json({
+        success: false,
+        message: 'Task not found',
+      });
+    }
+    
     const task = await routineService.updateRoutineTask(taskId, userId, req.body);
+    
+    // Get routine details to reschedule notification
+    const routine = existingTask.routine;
+    if (routine.enabled) {
+      // Cancel existing notification
+      await cancelRoutineTaskNotifications(taskId, userId);
+      // Schedule new notification
+      const schedule = routine.schedule as any;
+      scheduleRoutineTaskNotifications(
+        routine.id,
+        userId,
+        routine.title,
+        routine.frequency,
+        schedule,
+        routine.timezone,
+        task.id,
+        task.title,
+        task.reminderTime
+      ).catch(err => logger.error('Failed to schedule routine task notification:', err));
+    } else {
+      // Cancel notification if routine is disabled
+      cancelRoutineTaskNotifications(taskId, userId)
+        .catch(err => logger.error('Failed to cancel routine task notification:', err));
+    }
     
     return res.json({
       success: true,
@@ -235,6 +315,10 @@ router.delete('/tasks/:taskId', async (req: AuthenticatedRequest, res: Response)
     const { taskId } = req.params;
     
     await routineService.deleteRoutineTask(taskId, userId);
+    
+    // Cancel notifications for this task
+    cancelRoutineTaskNotifications(taskId, userId)
+      .catch(err => logger.error('Failed to cancel routine task notification:', err));
     
     return res.json({
       success: true,
@@ -274,9 +358,25 @@ router.put('/tasks/:taskId/toggle', async (req: AuthenticatedRequest, res: Respo
 // POST /api/v1/routines/:routineId/reset
 router.post('/:routineId/reset', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const userId = req.user!.id;
     const { routineId } = req.params;
     
+    // Get routine first to check if it exists and is enabled
+    const routine = await routineService.getRoutineById(routineId, userId);
+    if (!routine) {
+      return res.status(404).json({
+        success: false,
+        message: 'Routine not found',
+      });
+    }
+    
     await routineService.resetRoutineTasks(routineId);
+    
+    // Reschedule notifications for the next occurrence after reset if routine is enabled
+    if (routine.enabled) {
+      scheduleRoutineNotifications(routineId, userId)
+        .catch(err => logger.error('Failed to reschedule routine notifications after reset:', err));
+    }
     
     return res.json({
       success: true,

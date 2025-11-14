@@ -366,6 +366,12 @@ export class RoutineService {
     for (const routine of routines) {
       try {
         await this.resetRoutineTasks(routine.id);
+        
+        // Reschedule notifications for the next occurrence after reset
+        // Use dynamic import to avoid circular dependencies
+        const { scheduleRoutineNotifications } = await import('./notificationScheduler');
+        scheduleRoutineNotifications(routine.id, userId)
+          .catch(err => logger.error(`Failed to reschedule notifications for routine ${routine.id} after reset:`, err));
       } catch (error) {
         logger.error(`Failed to reset routine ${routine.id}:`, error);
       }

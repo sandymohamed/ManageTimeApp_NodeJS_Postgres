@@ -186,10 +186,10 @@ export async function scheduleMilestoneDueDateNotifications(
     const prisma = getPrismaClient();
     
     // Delete existing reminders for this milestone
+    // Since targetId is null for GOAL type, match by note content
     await prisma.reminder.deleteMany({
       where: {
         targetType: 'GOAL',
-        targetId: goalId,
         userId,
         note: {
           contains: milestoneTitle,
@@ -221,12 +221,14 @@ export async function scheduleMilestoneDueDateNotifications(
         data: {
           userId,
           targetType: 'GOAL',
-          targetId: goalId,
+          targetId: null, // Set to null - foreign key constraint only applies to TASK type
           title: `Milestone Due Tomorrow: ${milestoneTitle}`,
           note: `Your milestone "${milestoneTitle}" is due tomorrow.`,
           triggerType: 'TIME',
           schedule: {
             at: oneDayBefore.toISOString(),
+            milestoneId: milestoneId, // Store IDs in schedule for reference
+            goalId: goalId,
           },
         },
       });
@@ -239,12 +241,14 @@ export async function scheduleMilestoneDueDateNotifications(
         data: {
           userId,
           targetType: 'GOAL',
-          targetId: goalId,
+          targetId: null, // Set to null - foreign key constraint only applies to TASK type
           title: `Milestone Due in 1 Hour: ${milestoneTitle}`,
           note: `Your milestone "${milestoneTitle}" is due in 1 hour.`,
           triggerType: 'TIME',
           schedule: {
             at: oneHourBefore.toISOString(),
+            milestoneId: milestoneId, // Store IDs in schedule for reference
+            goalId: goalId,
           },
         },
       });
@@ -256,12 +260,14 @@ export async function scheduleMilestoneDueDateNotifications(
       data: {
         userId,
         targetType: 'GOAL',
-        targetId: goalId,
+        targetId: null, // Set to null - foreign key constraint only applies to TASK type
         title: `Milestone Due Now: ${milestoneTitle}`,
         note: `Your milestone "${milestoneTitle}" is due now.`,
         triggerType: 'TIME',
         schedule: {
           at: dueDateTime.toISOString(),
+          milestoneId: milestoneId, // Store IDs in schedule for reference
+          goalId: goalId,
         },
       },
     });
@@ -295,11 +301,14 @@ export async function scheduleGoalTargetDateNotifications(
     const prisma = getPrismaClient();
     
     // Delete existing reminders for this goal
+    // Since targetId is null for GOAL type (due to FK constraint), we need to match by schedule.goalId
     await prisma.reminder.deleteMany({
       where: {
         targetType: 'GOAL',
-        targetId: goalId,
         userId,
+        note: {
+          contains: goalTitle,
+        },
       },
     });
 
@@ -327,12 +336,13 @@ export async function scheduleGoalTargetDateNotifications(
         data: {
           userId,
           targetType: 'GOAL',
-          targetId: goalId,
+          targetId: null, // Set to null - foreign key constraint only applies to TASK type
           title: `Goal Deadline in 1 Week: ${goalTitle}`,
           note: `Your goal "${goalTitle}" deadline is in 1 week.`,
           triggerType: 'TIME',
           schedule: {
             at: oneWeekBefore.toISOString(),
+            goalId: goalId, // Store goalId in schedule for reference
           },
         },
       });
@@ -345,12 +355,13 @@ export async function scheduleGoalTargetDateNotifications(
         data: {
           userId,
           targetType: 'GOAL',
-          targetId: goalId,
+          targetId: null, // Set to null - foreign key constraint only applies to TASK type
           title: `Goal Deadline Tomorrow: ${goalTitle}`,
           note: `Your goal "${goalTitle}" deadline is tomorrow.`,
           triggerType: 'TIME',
           schedule: {
             at: oneDayBefore.toISOString(),
+            goalId: goalId, // Store goalId in schedule for reference
           },
         },
       });
@@ -362,12 +373,13 @@ export async function scheduleGoalTargetDateNotifications(
       data: {
         userId,
         targetType: 'GOAL',
-        targetId: goalId,
+        targetId: null, // Set to null - foreign key constraint only applies to TASK type
         title: `Goal Deadline Today: ${goalTitle}`,
         note: `Your goal "${goalTitle}" deadline is today.`,
         triggerType: 'TIME',
         schedule: {
           at: targetDateTime.toISOString(),
+          goalId: goalId, // Store goalId in schedule for reference
         },
       },
     });
@@ -589,6 +601,325 @@ export async function sendTaskCreatedNotification(
     logger.info(`Sent task created notification for task ${taskId} to user ${userId}`);
   } catch (error) {
     logger.error(`Failed to send task created notification for ${taskId}:`, error);
+  }
+}
+
+/**
+ * Schedule push notifications for routine tasks
+ * Creates recurring reminders based on routine frequency and task reminderTime
+ */
+export async function scheduleRoutineTaskNotifications(
+  routineId: string,
+  userId: string,
+  routineTitle: string,
+  frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY',
+  schedule: { time?: string; days?: number[]; day?: number },
+  timezone: string,
+  taskId: string,
+  taskTitle: string,
+  reminderTime?: string | null
+): Promise<void> {
+  try {
+    const prisma = getPrismaClient();
+    const now = new Date();
+
+    // Cancel existing reminders for this routine task
+    // Since targetId is null for CUSTOM type (due to FK constraint), match by note content
+    await prisma.reminder.deleteMany({
+      where: {
+        targetType: 'CUSTOM',
+        userId,
+        note: {
+          contains: taskTitle,
+        },
+      },
+    });
+
+    // Skip if routine doesn't have a time set
+    if (!schedule.time) {
+      logger.info(`Routine ${routineId} has no time set, skipping notification scheduling`);
+      return;
+    }
+
+    // Calculate notification time based on routine schedule and task reminderTime
+    const [routineHours, routineMinutes] = schedule.time.split(':').map(Number);
+    
+    // Calculate adjusted notification time based on reminderTime
+    // reminderTime can be:
+    // - Absolute time: "05:00" (use this time directly)
+    // - Relative offset: "-15min", "-1hour", "-30min" (subtract from routine time)
+    let notificationHours = routineHours;
+    let notificationMinutes = routineMinutes;
+    
+    if (reminderTime) {
+      if (reminderTime.startsWith('-')) {
+        // Relative offset: subtract from routine time
+        const offsetStr = reminderTime.slice(1).toLowerCase();
+        if (offsetStr.includes('min')) {
+          const mins = parseInt(offsetStr.replace('min', '').replace('s', ''), 10);
+          const totalMinutes = routineHours * 60 + routineMinutes - mins;
+          notificationHours = Math.floor(totalMinutes / 60);
+          notificationMinutes = totalMinutes % 60;
+          // Handle negative hours (previous day)
+          if (notificationHours < 0) {
+            notificationHours += 24;
+          }
+        } else if (offsetStr.includes('hour')) {
+          const hours = parseInt(offsetStr.replace('hour', '').replace('s', ''), 10);
+          notificationHours = routineHours - hours;
+          // Handle negative hours (previous day)
+          if (notificationHours < 0) {
+            notificationHours += 24;
+          }
+        }
+      } else if (reminderTime.includes(':')) {
+        // Absolute time - use reminderTime directly
+        const [reminderHours, reminderMinutes] = reminderTime.split(':').map(Number);
+        notificationHours = reminderHours;
+        notificationMinutes = reminderMinutes;
+      }
+    }
+
+    // Format notification time as HH:mm
+    const notificationTimeStr = `${String(notificationHours).padStart(2, '0')}:${String(notificationMinutes).padStart(2, '0')}`;
+
+    // Calculate next occurrence based on frequency
+    // Use the notification time for calculations
+    let nextOccurrence: Date | null = null;
+
+    if (frequency === 'DAILY') {
+      nextOccurrence = new Date(now);
+      nextOccurrence.setHours(notificationHours, notificationMinutes, 0, 0);
+      if (nextOccurrence <= now) {
+        nextOccurrence.setDate(nextOccurrence.getDate() + 1);
+      }
+    } else if (frequency === 'WEEKLY' && schedule.days && schedule.days.length > 0) {
+      // Find soonest upcoming day
+      const currentDay = now.getDay();
+      let soonest: Date | null = null;
+      for (const day of schedule.days) {
+        const d = new Date(now);
+        const delta = (day - currentDay + 7) % 7;
+        d.setDate(d.getDate() + delta);
+        d.setHours(notificationHours, notificationMinutes, 0, 0);
+        if (d <= now) {
+          d.setDate(d.getDate() + 7);
+        }
+        if (!soonest || d < soonest) soonest = d;
+      }
+      nextOccurrence = soonest;
+    } else if (frequency === 'MONTHLY' && schedule.day) {
+      nextOccurrence = new Date(now);
+      nextOccurrence.setDate(schedule.day);
+      nextOccurrence.setHours(notificationHours, notificationMinutes, 0, 0);
+      if (nextOccurrence <= now) {
+        nextOccurrence.setMonth(nextOccurrence.getMonth() + 1);
+      }
+    } else if (frequency === 'YEARLY') {
+      // For yearly, we'd need more complex logic - skip for now
+      logger.warn(`Yearly frequency not fully supported for routine notifications, skipping ${routineId}`);
+      return;
+    }
+
+    if (!nextOccurrence || nextOccurrence <= now) {
+      logger.warn(`Could not calculate valid next occurrence for routine task ${taskId}, skipping notification`);
+      return;
+    }
+
+    // Create reminder schedule matching routine frequency
+    // Use the notification time (adjusted by reminderTime) for the schedule
+    // IMPORTANT: Store timezone in schedule for correct rescheduling
+    const reminderSchedule: any = {
+      frequency,
+      time: notificationTimeStr,
+      timezone: timezone || 'UTC', // Store routine timezone for rescheduling
+    };
+
+    if (frequency === 'WEEKLY' && schedule.days) {
+      reminderSchedule.days = schedule.days;
+    } else if (frequency === 'MONTHLY' && schedule.day) {
+      reminderSchedule.day = schedule.day;
+    }
+
+    logger.info(`Creating reminder for routine task ${taskId}`, {
+      reminderSchedule,
+      nextOccurrence: nextOccurrence.toISOString(),
+      routineId,
+      taskId,
+    });
+
+    // Create reminder record
+    const reminder = await prisma.reminder.create({
+      data: {
+        userId,
+        targetType: 'CUSTOM',
+        targetId: null, // Set to null - foreign key constraint only applies to TASK type
+        title: `Routine: ${routineTitle}`,
+        note: `Time to complete "${taskTitle}"`,
+        triggerType: 'TIME',
+          schedule: {
+            ...reminderSchedule,
+            routineId: routineId, // Store IDs in schedule for reference
+            taskId: taskId,
+          } as any,
+      },
+    });
+
+    // Schedule the first reminder
+    try {
+      const delay = nextOccurrence.getTime() - Date.now();
+      if (delay <= 0) {
+        logger.warn(`Cannot schedule routine task notification in the past for task ${taskId}`, {
+          taskId,
+          routineId,
+          nextOccurrence: nextOccurrence.toISOString(),
+          now: new Date().toISOString(),
+          delay,
+        });
+        return;
+      }
+
+      const job = await scheduleReminder(reminder.id, userId, nextOccurrence, 'ROUTINE_REMINDER');
+      logger.info(`Scheduled routine task notification for task ${taskId}`, {
+        reminderId: reminder.id,
+        taskId,
+        routineId,
+        taskTitle,
+        nextOccurrence: nextOccurrence.toISOString(),
+        schedule: reminderSchedule,
+        frequency,
+        jobId: job.id,
+        delay,
+        delayMinutes: Math.round(delay / 60000),
+      });
+    } catch (scheduleError: any) {
+      logger.error(`Failed to schedule reminder job for routine task ${taskId}:`, {
+        error: scheduleError,
+        reminderId: reminder.id,
+        taskId,
+        routineId,
+        nextOccurrence: nextOccurrence.toISOString(),
+        schedule: reminderSchedule,
+      });
+      // Don't throw - log the error but continue
+    }
+  } catch (error) {
+    logger.error(`Failed to schedule routine task notifications for task ${taskId}:`, {
+      error,
+      taskId,
+      routineId,
+      userId,
+    });
+  }
+}
+
+/**
+ * Cancel all notifications for a routine task
+ */
+export async function cancelRoutineTaskNotifications(
+  taskId: string,
+  userId: string
+): Promise<void> {
+  try {
+    const prisma = getPrismaClient();
+    // Since targetId is null for CUSTOM type, we need to match by schedule.taskId
+    const allCustomReminders = await prisma.reminder.findMany({
+      where: {
+        targetType: 'CUSTOM',
+        userId,
+      },
+    });
+    
+    // Filter reminders where schedule.taskId matches
+    const matchingReminders = allCustomReminders.filter((reminder) => {
+      const schedule = reminder.schedule as any;
+      return schedule?.taskId === taskId;
+    });
+    
+    // Delete matching reminders
+    for (const reminder of matchingReminders) {
+      await prisma.reminder.delete({
+        where: { id: reminder.id },
+      });
+    }
+    
+    logger.info(`Cancelled ${matchingReminders.length} reminders for routine task ${taskId}`);
+  } catch (error) {
+    logger.warn(`Failed to cancel reminders for routine task ${taskId}:`, error);
+  }
+}
+
+/**
+ * Cancel all notifications for all tasks in a routine
+ */
+export async function cancelRoutineNotifications(
+  routineId: string,
+  userId: string
+): Promise<void> {
+  try {
+    const prisma = getPrismaClient();
+    
+    // Get all tasks for this routine
+    const routine = await prisma.routine.findUnique({
+      where: { id: routineId },
+      include: { routineTasks: true },
+    });
+
+    if (!routine) {
+      return;
+    }
+
+    // Cancel notifications for each task
+    for (const task of routine.routineTasks) {
+      await cancelRoutineTaskNotifications(task.id, userId);
+    }
+
+    logger.info(`Cancelled all notifications for routine ${routineId}`);
+  } catch (error) {
+    logger.warn(`Failed to cancel notifications for routine ${routineId}:`, error);
+  }
+}
+
+/**
+ * Schedule notifications for all tasks in a routine
+ */
+export async function scheduleRoutineNotifications(
+  routineId: string,
+  userId: string
+): Promise<void> {
+  try {
+    const prisma = getPrismaClient();
+    
+    const routine = await prisma.routine.findUnique({
+      where: { id: routineId },
+      include: { routineTasks: true },
+    });
+
+    if (!routine || !routine.enabled) {
+      logger.info(`Routine ${routineId} not found or disabled, skipping notification scheduling`);
+      return;
+    }
+
+    const schedule = routine.schedule as any;
+
+    // Schedule notifications for each task
+    for (const task of routine.routineTasks) {
+      await scheduleRoutineTaskNotifications(
+        routine.id,
+        routine.userId,
+        routine.title,
+        routine.frequency,
+        schedule,
+        routine.timezone,
+        task.id,
+        task.title,
+        task.reminderTime
+      );
+    }
+
+    logger.info(`Scheduled notifications for all tasks in routine ${routineId}`);
+  } catch (error) {
+    logger.error(`Failed to schedule notifications for routine ${routineId}:`, error);
   }
 }
 

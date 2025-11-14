@@ -131,10 +131,16 @@ const initializeWorkers = async (): Promise<void> => {
 // --- Helper: compute next occurrence for simple schedules ---
 function computeNextOccurrence(schedule: any, timezone: string): Date | null {
   try {
-    if (!schedule || typeof schedule !== 'object') return null;
+    if (!schedule || typeof schedule !== 'object') {
+      logger.debug('computeNextOccurrence: schedule is not an object', { schedule });
+      return null;
+    }
 
     // One-off at a specific ISO date: do not reschedule
-    if (schedule.at) return null;
+    if (schedule.at) {
+      logger.debug('computeNextOccurrence: one-off schedule, not rescheduling', { schedule });
+      return null;
+    }
 
     const now = new Date();
 
@@ -145,6 +151,7 @@ function computeNextOccurrence(schedule: any, timezone: string): Date | null {
       if (next <= now) {
         next.setDate(next.getDate() + 1);
       }
+      logger.debug('computeNextOccurrence: calculated DAILY next occurrence', { next: next.toISOString(), schedule });
       return next;
     }
 
@@ -163,11 +170,35 @@ function computeNextOccurrence(schedule: any, timezone: string): Date | null {
         }
         if (!soonest || d < soonest) soonest = d;
       }
+      logger.debug('computeNextOccurrence: calculated WEEKLY next occurrence', { next: soonest?.toISOString(), schedule });
       return soonest;
     }
 
+    if (schedule.frequency === 'MONTHLY' && schedule.time && schedule.day) {
+      const [hh, mm] = String(schedule.time).split(':').map((v: string) => parseInt(v, 10));
+      const targetDay = schedule.day;
+      const next = new Date(now);
+      next.setDate(targetDay);
+      next.setHours(hh || 0, mm || 0, 0, 0);
+      if (next <= now) {
+        next.setMonth(next.getMonth() + 1);
+        // Handle edge case where target day doesn't exist in next month (e.g., Feb 30)
+        // Adjust to last day of month if target day is too high
+        const daysInMonth = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+        if (targetDay > daysInMonth) {
+          next.setDate(daysInMonth);
+        } else {
+          next.setDate(targetDay);
+        }
+      }
+      logger.debug('computeNextOccurrence: calculated MONTHLY next occurrence', { next: next.toISOString(), schedule });
+      return next;
+    }
+
+    logger.warn('computeNextOccurrence: unsupported schedule format', { schedule, frequency: schedule.frequency });
     return null;
-  } catch {
+  } catch (error) {
+    logger.error('computeNextOccurrence: error calculating next occurrence', { error, schedule });
     return null;
   }
 }
@@ -175,7 +206,7 @@ function computeNextOccurrence(schedule: any, timezone: string): Date | null {
 async function processReminderJob(job: Job): Promise<void> {
   const { reminderId, userId, type } = job.data;
 
-  logger.info(`Processing reminder job: ${reminderId}`);
+  logger.info(`Processing reminder job: ${reminderId}`, { type, userId });
 
   try {
     const { pushNotificationService } = await import('./pushNotificationService');
@@ -192,6 +223,14 @@ async function processReminderJob(job: Job): Promise<void> {
       return;
     }
 
+    logger.info(`Reminder found: ${reminderId}`, { 
+      title: reminder.title, 
+      note: reminder.note,
+      targetType: reminder.targetType,
+      targetId: reminder.targetId,
+      schedule: reminder.schedule 
+    });
+
     // Check user notification preferences
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -201,50 +240,116 @@ async function processReminderJob(job: Job): Promise<void> {
     const settings = (user?.settings as any) || {};
     const notificationSettings = settings.notifications || {};
 
+    logger.info('Notification settings check for reminder', {
+      userId,
+      type,
+      reminderId,
+      pushNotifications: notificationSettings.pushNotifications,
+      routineReminders: notificationSettings.routineReminders,
+      targetType: reminder.targetType,
+      targetId: reminder.targetId,
+    });
+
     // Check if push notifications are enabled and if reminder type is enabled
+    // Default to true (enabled) unless explicitly set to false
     let shouldSendPush = notificationSettings.pushNotifications !== false;
 
     if (type === 'TASK_REMINDER' && notificationSettings.taskReminders === false) {
       shouldSendPush = false;
+      logger.debug('Push notification disabled: taskReminders setting', { type });
     } else if (type === 'GOAL_REMINDER' && notificationSettings.goalReminders === false) {
       shouldSendPush = false;
+      logger.debug('Push notification disabled: goalReminders setting', { type });
     } else if (type === 'DUE_DATE_REMINDER' && notificationSettings.dueDateReminders === false) {
       shouldSendPush = false;
+      logger.debug('Push notification disabled: dueDateReminders setting', { type });
+    } else if (type === 'ROUTINE_REMINDER' && notificationSettings.routineReminders === false) {
+      shouldSendPush = false;
+      logger.info('Push notification disabled: routineReminders setting is false', { 
+        type,
+        userId,
+        reminderId,
+        routineReminders: notificationSettings.routineReminders,
+      });
+    } else if (type === 'ROUTINE_REMINDER') {
+      // Log when routine reminders are enabled
+      logger.debug('Routine reminder notification enabled', {
+        type,
+        userId,
+        reminderId,
+        routineReminders: notificationSettings.routineReminders,
+      });
     }
 
     // Send push notification if enabled
     if (shouldSendPush && pushNotificationService.isAvailable()) {
+      logger.info(`Sending push notification for reminder ${reminderId}`, {
+        userId,
+        type,
+        title: reminder.title,
+        body: reminder.note,
+      });
+      // Prepare data payload (FCM requires all data values to be strings)
+      const notificationData: { [key: string]: string } = {
+        reminderId: String(reminderId),
+        type: String(type),
+        targetType: String(reminder.targetType),
+      };
+      
+      if (reminder.targetId) {
+        notificationData.targetId = String(reminder.targetId);
+      }
+
       await pushNotificationService.sendPushNotification(
         userId,
         {
           title: reminder.title,
           body: reminder.note || 'Reminder',
-          data: {
-            reminderId,
-            type,
-            targetType: reminder.targetType,
-            targetId: reminder.targetId,
-          },
+          data: notificationData,
           sound: 'default',
         },
         false // Already checked preferences above
       );
+      logger.info(`Push notification sent successfully for reminder ${reminderId}`);
+    } else {
+      logger.warn(`Push notification not sent for reminder ${reminderId}`, {
+        shouldSendPush,
+        isAvailable: pushNotificationService.isAvailable(),
+        type,
+      });
     }
 
     // Schedule next occurrence if recurring-like schedule is present
     try {
       const schedule: any = reminder.schedule as any;
+      logger.debug('Attempting to reschedule reminder', {
+        reminderId,
+        schedule,
+        type,
+      });
       // Expected minimal schedule formats:
       // { frequency: 'DAILY', time: 'HH:mm' }
       // { frequency: 'WEEKLY', time: 'HH:mm', days: [0-6] } // 0=Sunday
+      // { frequency: 'MONTHLY', time: 'HH:mm', day: 1-31 }
       // { at: 'ISO_DATE' } // one-off (no reschedule)
-      const next = computeNextOccurrence(schedule, (user?.settings as any)?.timezone || 'UTC');
+      // Use timezone from schedule if provided (for routine reminders), otherwise from user settings
+      const scheduleTimezone = schedule.timezone || (user?.settings as any)?.timezone || 'UTC';
+      const next = computeNextOccurrence(schedule, scheduleTimezone);
       if (next) {
         await scheduleReminder(reminderId, userId, next, type);
-        logger.info(`Rescheduled recurring reminder ${reminderId} for ${next.toISOString()}`);
+        logger.info(`Rescheduled recurring reminder ${reminderId} for ${next.toISOString()}`, {
+          type,
+          schedule,
+          nextOccurrence: next.toISOString(),
+        });
+      } else {
+        logger.warn(`Could not compute next occurrence for reminder ${reminderId}`, {
+          schedule,
+          type,
+        });
       }
     } catch (rescheduleError) {
-      logger.warn(`Could not reschedule reminder ${reminderId}:`, rescheduleError);
+      logger.error(`Could not reschedule reminder ${reminderId}:`, rescheduleError);
     }
 
     logger.info(`Reminder job completed: ${reminderId}`);
