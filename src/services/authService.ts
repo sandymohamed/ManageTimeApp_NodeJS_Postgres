@@ -36,7 +36,7 @@ export class AuthService {
     const refreshToken = jwt.sign(
       { userId, email, type: 'refresh' } as JWTPayload,
       process.env.JWT_REFRESH_SECRET!,
-      { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' } as SignOptions
+      { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '36500d' } as SignOptions // ~100 years, effectively never
     );
 
     return {
@@ -92,12 +92,14 @@ export class AuthService {
     // Generate tokens
     const tokens = this.generateTokens(user.id, user.email);
 
-    // Store refresh token
+    // Store refresh token with very long expiration (100 years, effectively never expires)
+    const farFutureDate = new Date();
+    farFutureDate.setFullYear(farFutureDate.getFullYear() + 100);
     await prisma.refreshToken.create({
       data: {
         userId: user.id,
         token: tokens.refreshToken,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        expiresAt: farFutureDate, // 100 years, effectively never expires
       },
     });
 
@@ -127,12 +129,14 @@ export class AuthService {
     // Generate tokens
     const tokens = this.generateTokens(user.id, user.email);
 
-    // Store refresh token
+    // Store refresh token with very long expiration (100 years, effectively never expires)
+    const farFutureDate = new Date();
+    farFutureDate.setFullYear(farFutureDate.getFullYear() + 100);
     await prisma.refreshToken.create({
       data: {
         userId: user.id,
         token: tokens.refreshToken,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        expiresAt: farFutureDate, // 100 years, effectively never expires
       },
     });
 
@@ -184,23 +188,29 @@ export class AuthService {
       include: { user: true },
     });
 
-    if (!tokenRecord || tokenRecord.expiresAt < new Date()) {
+    if (!tokenRecord) {
+      throw new AuthenticationError('Invalid refresh token');
+    }
+    
+    // Only check expiration if expiresAt is set and not far in the future (for legacy tokens)
+    // New tokens have 100 year expiration, so this check will rarely fail
+    if (tokenRecord.expiresAt && tokenRecord.expiresAt < new Date()) {
       // Clean up expired token
-      if (tokenRecord) {
-        await prisma.refreshToken.delete({ where: { id: tokenRecord.id } });
-      }
+      await prisma.refreshToken.delete({ where: { id: tokenRecord.id } });
       throw new AuthenticationError('Refresh token expired');
     }
 
     // Generate new tokens
     const tokens = this.generateTokens(tokenRecord.user.id, tokenRecord.user.email);
 
-    // Update refresh token in database
+    // Update refresh token in database with very long expiration (100 years, effectively never expires)
+    const farFutureDate = new Date();
+    farFutureDate.setFullYear(farFutureDate.getFullYear() + 100);
     await prisma.refreshToken.update({
       where: { id: tokenRecord.id },
       data: {
         token: tokens.refreshToken,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        expiresAt: farFutureDate, // 100 years, effectively never expires
       },
     });
 
