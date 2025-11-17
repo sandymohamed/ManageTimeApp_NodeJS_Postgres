@@ -14,6 +14,7 @@ export interface CreateRoutineData {
   frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
   schedule: RoutineSchedule;
   timezone?: string;
+  reminderBefore?: string; // e.g., "2h", "1d", "1w"
 }
 
 export interface CreateRoutineTaskData {
@@ -45,6 +46,7 @@ export class RoutineService {
         frequency: data.frequency,
         schedule: data.schedule as Prisma.InputJsonValue,
         timezone: data.timezone || 'UTC',
+        reminderBefore: data.reminderBefore || null,
         nextOccurrenceAt: nextOccurrence,
       },
       include: {
@@ -73,6 +75,29 @@ export class RoutineService {
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    // Reschedule reminders for routines that have reminderBefore but might not have reminders yet
+    const { scheduleRoutineNotifications } = await import('./notificationScheduler');
+    for (const routine of routines) {
+      if (routine.enabled && routine.reminderBefore) {
+        // Check if reminder exists
+        const reminderCount = await prisma.reminder.count({
+          where: {
+            userId: routine.userId,
+            targetType: 'CUSTOM',
+            title: {
+              contains: `Routine Reminder: ${routine.title}`,
+            },
+          },
+        });
+        
+        // If no reminder exists, schedule it
+        if (reminderCount === 0) {
+          scheduleRoutineNotifications(routine.id, routine.userId)
+            .catch(err => logger.error(`Failed to reschedule reminders for routine ${routine.id}:`, err));
+        }
+      }
+    }
 
     return routines;
   }
@@ -137,6 +162,7 @@ export class RoutineService {
     if (data.frequency) updateData.frequency = data.frequency;
     if (data.schedule) updateData.schedule = data.schedule;
     if (data.timezone) updateData.timezone = data.timezone;
+    if (data.reminderBefore !== undefined) updateData.reminderBefore = data.reminderBefore || null;
 
     // Recalculate next occurrence if schedule changed
     if (data.schedule || data.frequency) {

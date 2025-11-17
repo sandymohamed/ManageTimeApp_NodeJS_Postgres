@@ -22,6 +22,7 @@ const createRoutineSchema = Joi.object({
     day: Joi.number().min(1).max(31).optional(),
   }).required(),
   timezone: Joi.string().optional().default('UTC'),
+  reminderBefore: Joi.string().pattern(/^\d+[hdw]$/).optional().allow(null, ''),
 });
 
 const updateRoutineSchema = Joi.object({
@@ -35,6 +36,7 @@ const updateRoutineSchema = Joi.object({
   }).optional(),
   timezone: Joi.string().optional(),
   enabled: Joi.boolean().optional(),
+  reminderBefore: Joi.string().pattern(/^\d+[hdw]$/).optional().allow(null, ''),
 });
 
 const createTaskSchema = Joi.object({
@@ -79,6 +81,11 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     // Convert empty description to undefined/null
     if (value.description === '' || value.description === null) {
       value.description = undefined;
+    }
+    
+    // Convert empty reminderBefore to undefined/null
+    if (value.reminderBefore === '' || value.reminderBefore === null) {
+      value.reminderBefore = undefined;
     }
     
     const routine = await routineService.createRoutine(userId, value as CreateRoutineData);
@@ -147,6 +154,11 @@ router.put('/:routineId', async (req: AuthenticatedRequest, res: Response) => {
     // Convert empty description to undefined/null
     if (value.description === '' || value.description === null) {
       value.description = undefined;
+    }
+    
+    // Convert empty reminderBefore to undefined/null
+    if (value.reminderBefore === '' || value.reminderBefore === null) {
+      value.reminderBefore = undefined;
     }
     
     const routine = await routineService.updateRoutine(routineId, userId, value);

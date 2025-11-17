@@ -59,6 +59,7 @@ interface PushNotificationPayload {
   data?: any;
   sound?: string;
   badge?: number;
+  imageUrl?: string; // Logo/image URL for notifications
 }
 
 interface UserPushToken {
@@ -66,6 +67,10 @@ interface UserPushToken {
   platform: 'android' | 'ios';
   registeredAt: Date;
 }
+
+// App configuration constants
+const APP_NAME = process.env.APP_NAME || 'Manage Time';
+const APP_LOGO_URL = process.env.APP_LOGO_URL || ''; // Can be set via environment variable
 
 class PushNotificationService {
   private static instance: PushNotificationService;
@@ -156,11 +161,19 @@ class PushNotificationService {
 
       // Prepare FCM messages
       const messages = tokens.map((tokenInfo: UserPushToken) => {
+        // Use payload title as-is (app name is shown by OS automatically)
+        // If title is missing, use app name as fallback
+        const notificationTitle = payload.title || APP_NAME;
+
+        const imageUrl = payload.imageUrl || APP_LOGO_URL || undefined;
+        
         const message: admin.messaging.Message = {
           token: tokenInfo.token,
           notification: {
-            title: payload.title,
+            title: notificationTitle,
             body: payload.body,
+            // App name is automatically shown by the OS, so we don't prefix it here
+            // Image URL can be set at notification level for web, but platform-specific is better
           },
           data: payload.data || {},
           android: {
@@ -168,6 +181,12 @@ class PushNotificationService {
             notification: {
               sound: payload.sound || 'default',
               channelId: 'default-channel-id',
+              // Add image for Android notifications (requires imageUrl)
+              ...(imageUrl ? { imageUrl } : {}),
+              // Ensure notification is shown even when app is in foreground
+              visibility: 'public' as const,
+              // Make notification sticky/important
+              importance: 'high' as const,
             },
           },
           apns: {
@@ -177,6 +196,12 @@ class PushNotificationService {
                 badge: payload.badge,
               },
             },
+            // For iOS, add fcm_options with image for rich notifications (iOS 15+)
+            ...(imageUrl ? {
+              fcmOptions: {
+                imageUrl: imageUrl,
+              },
+            } : {}),
           },
         };
 

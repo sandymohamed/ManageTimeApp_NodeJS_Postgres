@@ -883,6 +883,120 @@ export async function cancelRoutineNotifications(
 /**
  * Schedule notifications for all tasks in a routine
  */
+/**
+ * Schedule routine reminder notification based on reminderBefore field
+ * This creates a reminder before the routine occurs (e.g., 2 hours before, 1 day before)
+ */
+export async function scheduleRoutineReminderNotification(
+  routineId: string,
+  userId: string,
+  routineTitle: string,
+  frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY',
+  schedule: { time?: string; days?: number[]; day?: number },
+  timezone: string,
+  reminderBefore: string, // e.g., "2h", "1d", "1w"
+  nextOccurrence: Date
+): Promise<void> {
+  try {
+    const prisma = getPrismaClient();
+    const now = new Date();
+
+    // Parse reminderBefore (e.g., "2h", "1d", "1w")
+    const match = reminderBefore.match(/^(\d+)([hdw])$/);
+    if (!match) {
+      logger.warn(`Invalid reminderBefore format: ${reminderBefore}, skipping reminder notification`);
+      return;
+    }
+
+    const [, valueStr, unit] = match;
+    const value = parseInt(valueStr, 10);
+
+    // Calculate reminder time by subtracting from next occurrence
+    const reminderTime = new Date(nextOccurrence);
+    
+    if (unit === 'h') {
+      // Hours before
+      reminderTime.setHours(reminderTime.getHours() - value);
+    } else if (unit === 'd') {
+      // Days before
+      reminderTime.setDate(reminderTime.getDate() - value);
+    } else if (unit === 'w') {
+      // Weeks before
+      reminderTime.setDate(reminderTime.getDate() - (value * 7));
+    }
+
+    // Only schedule if reminder time is in the future
+    if (reminderTime <= now) {
+      logger.info(`Routine reminder time is in the past, skipping: ${reminderTime.toISOString()}`);
+      return;
+    }
+
+    // Cancel existing routine reminder notifications
+    await prisma.reminder.deleteMany({
+      where: {
+        targetType: 'CUSTOM',
+        userId,
+        title: {
+          contains: `Routine Reminder: ${routineTitle}`,
+        },
+      },
+    });
+
+    // Create reminder schedule
+    const reminderSchedule: any = {
+      frequency,
+      time: schedule.time,
+      timezone: timezone || 'UTC',
+      routineId,
+      reminderBefore,
+    };
+
+    if (frequency === 'WEEKLY' && schedule.days) {
+      reminderSchedule.days = schedule.days;
+    } else if (frequency === 'MONTHLY' && schedule.day) {
+      reminderSchedule.day = schedule.day;
+    }
+
+    // Create reminder record
+    const reminder = await prisma.reminder.create({
+      data: {
+        userId,
+        targetType: 'CUSTOM',
+        targetId: null,
+        title: `Routine Reminder: ${routineTitle}`,
+        note: `Your routine "${routineTitle}" is coming up soon`,
+        triggerType: 'TIME',
+        schedule: reminderSchedule as any,
+      },
+    });
+
+    // Schedule the reminder notification
+    const delay = reminderTime.getTime() - Date.now();
+    if (delay <= 0) {
+      logger.warn(`Cannot schedule routine reminder in the past for routine ${routineId}`, {
+        reminderTime: reminderTime.toISOString(),
+        now: new Date().toISOString(),
+        delay,
+      });
+      return;
+    }
+
+    const job = await scheduleReminder(reminder.id, userId, reminderTime, 'ROUTINE_REMINDER');
+    logger.info(`Scheduled routine reminder notification for routine ${routineId}`, {
+      reminderId: reminder.id,
+      routineId,
+      reminderTime: reminderTime.toISOString(),
+      nextOccurrence: nextOccurrence.toISOString(),
+      reminderBefore,
+      jobId: job.id,
+      delayMs: delay,
+      delayMinutes: Math.round(delay / 60000),
+    });
+  } catch (error) {
+    logger.error(`Failed to schedule routine reminder notification for routine ${routineId}:`, error);
+  }
+}
+
 export async function scheduleRoutineNotifications(
   routineId: string,
   userId: string
@@ -901,6 +1015,54 @@ export async function scheduleRoutineNotifications(
     }
 
     const schedule = routine.schedule as any;
+
+    // Calculate next occurrence for the routine
+    const now = new Date();
+    let nextOccurrence: Date | null = null;
+    const [routineHours, routineMinutes] = (schedule.time || '00:00').split(':').map(Number);
+
+    if (routine.frequency === 'DAILY') {
+      nextOccurrence = new Date(now);
+      nextOccurrence.setHours(routineHours, routineMinutes, 0, 0);
+      if (nextOccurrence <= now) {
+        nextOccurrence.setDate(nextOccurrence.getDate() + 1);
+      }
+    } else if (routine.frequency === 'WEEKLY' && schedule.days && schedule.days.length > 0) {
+      const currentDay = now.getDay();
+      let soonest: Date | null = null;
+      for (const day of schedule.days) {
+        const d = new Date(now);
+        const delta = (day - currentDay + 7) % 7;
+        d.setDate(d.getDate() + delta);
+        d.setHours(routineHours, routineMinutes, 0, 0);
+        if (d <= now) {
+          d.setDate(d.getDate() + 7);
+        }
+        if (!soonest || d < soonest) soonest = d;
+      }
+      nextOccurrence = soonest;
+    } else if (routine.frequency === 'MONTHLY' && schedule.day) {
+      nextOccurrence = new Date(now);
+      nextOccurrence.setDate(schedule.day);
+      nextOccurrence.setHours(routineHours, routineMinutes, 0, 0);
+      if (nextOccurrence <= now) {
+        nextOccurrence.setMonth(nextOccurrence.getMonth() + 1);
+      }
+    }
+
+    // Schedule routine reminder if reminderBefore is set
+    if (routine.reminderBefore && nextOccurrence) {
+      await scheduleRoutineReminderNotification(
+        routine.id,
+        routine.userId,
+        routine.title,
+        routine.frequency,
+        schedule,
+        routine.timezone,
+        routine.reminderBefore,
+        nextOccurrence
+      );
+    }
 
     // Schedule notifications for each task
     for (const task of routine.routineTasks) {

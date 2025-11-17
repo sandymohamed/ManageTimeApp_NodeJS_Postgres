@@ -174,30 +174,52 @@ export class AuthService {
   static async refreshToken(refreshToken: string): Promise<AuthTokens> {
     const prisma = getPrismaClient();
 
-    // Verify refresh token
-    let decoded: JWTPayload;
-    try {
-      decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!) as JWTPayload;
-    } catch (error) {
-      throw new AuthenticationError('Invalid refresh token');
-    }
-
-    // Check if token exists in database
+    // First check if token exists in database (this allows us to handle expired JWTs gracefully)
     const tokenRecord = await prisma.refreshToken.findUnique({
       where: { token: refreshToken },
       include: { user: true },
     });
 
     if (!tokenRecord) {
+      logger.warn('Refresh token not found in database', { token: refreshToken.substring(0, 20) + '...' });
       throw new AuthenticationError('Invalid refresh token');
     }
     
+    // Check database expiration (this is the source of truth for new tokens)
     // Only check expiration if expiresAt is set and not far in the future (for legacy tokens)
     // New tokens have 100 year expiration, so this check will rarely fail
     if (tokenRecord.expiresAt && tokenRecord.expiresAt < new Date()) {
       // Clean up expired token
       await prisma.refreshToken.delete({ where: { id: tokenRecord.id } });
+      logger.warn('Refresh token expired in database', { 
+        tokenId: tokenRecord.id,
+        expiresAt: tokenRecord.expiresAt,
+        now: new Date()
+      });
       throw new AuthenticationError('Refresh token expired');
+    }
+
+    // Verify JWT signature (but allow expired JWTs if they're valid in database)
+    // This handles cases where JWT might be expired but database says it's still valid
+    let decoded: JWTPayload;
+    try {
+      // Try to verify without checking expiration first
+      decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!, {
+        ignoreExpiration: true, // Ignore JWT expiration, use database expiration instead
+      }) as JWTPayload;
+    } catch (error: any) {
+      // If signature is invalid (not just expired), then it's truly invalid
+      if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+        logger.warn('Refresh token JWT verification failed', { 
+          error: error.name,
+          message: error.message,
+          tokenId: tokenRecord.id
+        });
+        // Delete invalid token from database
+        await prisma.refreshToken.delete({ where: { id: tokenRecord.id } });
+        throw new AuthenticationError('Invalid refresh token');
+      }
+      throw error;
     }
 
     // Generate new tokens

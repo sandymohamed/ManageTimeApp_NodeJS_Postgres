@@ -334,7 +334,108 @@ async function processReminderJob(job: Job): Promise<void> {
       // { at: 'ISO_DATE' } // one-off (no reschedule)
       // Use timezone from schedule if provided (for routine reminders), otherwise from user settings
       const scheduleTimezone = schedule.timezone || (user?.settings as any)?.timezone || 'UTC';
-      const next = computeNextOccurrence(schedule, scheduleTimezone);
+      
+      // For routine reminders, calculate next reminder time (routine time - reminderBefore)
+      let next: Date | null = null;
+      if (type === 'ROUTINE_REMINDER' && schedule.reminderBefore) {
+        // Calculate next routine occurrence
+        const routineNext = computeNextOccurrence(schedule, scheduleTimezone);
+        if (routineNext) {
+          // Calculate reminder time by subtracting reminderBefore
+          const match = schedule.reminderBefore.match(/^(\d+)([hdw])$/);
+          if (match) {
+            const [, valueStr, unit] = match;
+            const value = parseInt(valueStr, 10);
+            next = new Date(routineNext);
+            
+            if (unit === 'h') {
+              next.setHours(next.getHours() - value);
+            } else if (unit === 'd') {
+              next.setDate(next.getDate() - value);
+            } else if (unit === 'w') {
+              next.setDate(next.getDate() - (value * 7));
+            }
+            
+            // If the calculated reminder time is in the past, calculate the next one
+            const now = new Date();
+            if (next <= now) {
+              logger.info(`Calculated reminder time is in the past, calculating next occurrence`, {
+                reminderId,
+                calculatedTime: next.toISOString(),
+                now: now.toISOString(),
+              });
+              
+              // Calculate the next routine occurrence after the current one
+              // We need to find the next routine occurrence that gives us a future reminder time
+              let nextRoutineOccurrence = new Date(routineNext);
+              let attempts = 0;
+              const maxAttempts = 12; // Prevent infinite loop (e.g., 12 months for monthly)
+              
+              while (next <= now && attempts < maxAttempts) {
+                attempts++;
+                
+                // Move to next occurrence based on frequency
+                if (schedule.frequency === 'DAILY') {
+                  nextRoutineOccurrence.setDate(nextRoutineOccurrence.getDate() + 1);
+                } else if (schedule.frequency === 'WEEKLY' && schedule.days) {
+                  nextRoutineOccurrence.setDate(nextRoutineOccurrence.getDate() + 7);
+                } else if (schedule.frequency === 'MONTHLY' && schedule.day) {
+                  nextRoutineOccurrence.setMonth(nextRoutineOccurrence.getMonth() + 1);
+                  // Handle edge case where target day doesn't exist in next month
+                  const daysInMonth = new Date(nextRoutineOccurrence.getFullYear(), nextRoutineOccurrence.getMonth() + 1, 0).getDate();
+                  if (schedule.day > daysInMonth) {
+                    nextRoutineOccurrence.setDate(daysInMonth);
+                  } else {
+                    nextRoutineOccurrence.setDate(schedule.day);
+                  }
+                  const [hh, mm] = String(schedule.time).split(':').map((v: string) => parseInt(v, 10));
+                  nextRoutineOccurrence.setHours(hh || 0, mm || 0, 0, 0);
+                } else {
+                  break; // Unsupported frequency
+                }
+                
+                // Recalculate reminder time from new routine occurrence
+                next = new Date(nextRoutineOccurrence);
+                if (unit === 'h') {
+                  next.setHours(next.getHours() - value);
+                } else if (unit === 'd') {
+                  next.setDate(next.getDate() - value);
+                } else if (unit === 'w') {
+                  next.setDate(next.getDate() - (value * 7));
+                }
+              }
+              
+              if (next <= now) {
+                logger.warn(`Could not find future reminder time after ${attempts} attempts`, {
+                  reminderId,
+                  lastCalculated: next.toISOString(),
+                  now: now.toISOString(),
+                });
+                next = null;
+              } else {
+                logger.info(`Found future reminder time after ${attempts} attempt(s)`, {
+                  reminderId,
+                  reminderTime: next.toISOString(),
+                  routineOccurrence: nextRoutineOccurrence.toISOString(),
+                });
+              }
+            }
+            
+            if (next) {
+              logger.info(`Calculated next reminder time for routine reminder`, {
+                reminderId,
+                routineNext: routineNext.toISOString(),
+                reminderBefore: schedule.reminderBefore,
+                reminderTime: next.toISOString(),
+              });
+            }
+          }
+        }
+      } else {
+        // For other reminder types, use routine occurrence directly
+        next = computeNextOccurrence(schedule, scheduleTimezone);
+      }
+      
       if (next) {
         await scheduleReminder(reminderId, userId, next, type);
         logger.info(`Rescheduled recurring reminder ${reminderId} for ${next.toISOString()}`, {

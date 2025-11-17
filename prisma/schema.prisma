@@ -173,7 +173,6 @@ model Task {
   parentTask  Task?       @relation("TaskHierarchy", fields: [parentTaskId], references: [id])
   subtasks    Task[]      @relation("TaskHierarchy")
   alarms      Alarm[]
-  reminders   Reminder[]
 
   @@map("tasks")
 }
@@ -430,6 +429,7 @@ model Routine {
   schedule    Json             // { time: "05:00", days: [1,2,3] } or { day: 1, time: "00:00" } for monthly
   timezone    String           @default("UTC")
   enabled     Boolean          @default(true)
+  reminderBefore String?       @map("reminder_before") // e.g., "2h" for hours, "2d" for days, "1w" for weeks
   lastResetAt DateTime?        @map("last_reset_at")
   nextOccurrenceAt DateTime?  @map("next_occurrence_at")
   createdAt   DateTime         @default(now()) @map("created_at")
