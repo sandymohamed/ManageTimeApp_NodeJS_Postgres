@@ -73,9 +73,44 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
       prisma.goal.count({ where }),
     ]);
 
+    // Calculate progress for each goal and check for overdue milestones
+    const goalsWithProgress = await Promise.all(goals.map(async (goal: any) => {
+      const totalMilestones = goal.milestones.length;
+      // Check for DONE status (case-insensitive to handle any variations)
+      const completedMilestones = goal.milestones.filter((m: any) => 
+        m.status && (m.status.toUpperCase() === 'DONE' || m.status === 'DONE')
+      ).length;
+      const calculatedProgress = totalMilestones > 0 
+        ? Math.round((completedMilestones / totalMilestones) * 100) 
+        : (goal.progress || 0);
+
+      // Update goal progress in database if it's different
+      if (calculatedProgress !== (goal.progress || 0)) {
+        await prisma.goal.update({
+          where: { id: goal.id },
+          data: { progress: calculatedProgress },
+        });
+      }
+
+      return {
+        ...goal,
+        progress: calculatedProgress, // Always use calculated progress
+        milestones: goal.milestones.map((milestone: any) => ({
+          ...milestone,
+          targetDate: milestone.dueDate ? milestone.dueDate.toISOString() : null,
+        })),
+      };
+    }));
+
+    // Check for overdue milestones (only once, not per goal)
+    const { checkAndNotifyOverdueMilestones } = await import('../services/notificationScheduler');
+    checkAndNotifyOverdueMilestones().catch(err => 
+      logger.error('Failed to check overdue milestones:', err)
+    );
+
     res.json({
       success: true,
-      data: goals,
+      data: goalsWithProgress,
       pagination: {
         page: Number(page),
         limit: Number(limit),
@@ -126,9 +161,47 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
       throw new NotFoundError('Goal');
     }
 
+    // Calculate progress based on completed milestones
+    const totalMilestones = goal.milestones.length;
+    // Check for DONE status (case-insensitive to handle any variations)
+    const completedMilestones = goal.milestones.filter((m: any) => 
+      m.status && (m.status.toUpperCase() === 'DONE' || m.status === 'DONE')
+    ).length;
+    const calculatedProgress = totalMilestones > 0 
+      ? Math.round((completedMilestones / totalMilestones) * 100) 
+      : (goal.progress || 0);
+    
+    logger.info(`Goal ${goal.id} progress calculation: ${completedMilestones}/${totalMilestones} = ${calculatedProgress}%`);
+
+    // Update goal progress in database if it's different
+    if (calculatedProgress !== (goal.progress || 0)) {
+      await prisma.goal.update({
+        where: { id: goal.id },
+        data: { progress: calculatedProgress },
+      });
+      // Update the goal object with new progress
+      goal.progress = calculatedProgress;
+    }
+
+    // Check for overdue milestones and send notifications
+    const { checkAndNotifyOverdueMilestones } = await import('../services/notificationScheduler');
+    checkAndNotifyOverdueMilestones().catch(err => 
+      logger.error('Failed to check overdue milestones:', err)
+    );
+
+    // Map milestone dueDate to targetDate for frontend compatibility
+    const goalWithMappedMilestones = {
+      ...goal,
+      progress: calculatedProgress,
+      milestones: goal.milestones.map((milestone: any) => ({
+        ...milestone,
+        targetDate: milestone.dueDate ? milestone.dueDate.toISOString() : null,
+      })),
+    };
+
     res.json({
       success: true,
-      data: goal,
+      data: goalWithMappedMilestones,
     });
   } catch (error) {
     logger.error('Failed to get goal:', error);
@@ -147,11 +220,15 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.user!.id;
     const prisma = getPrismaClient();
 
+    // Set status to ACTIVE by default if not provided
+    const goalData = {
+      ...value,
+      status: value.status || 'ACTIVE',
+      userId,
+    };
+
     const goal = await prisma.goal.create({
-      data: {
-        ...value,
-        userId,
-      },
+      data: goalData,
       include: {
         milestones: true,
         _count: {
@@ -282,13 +359,41 @@ router.post('/:id/milestones/:milestoneId/complete', async (req: AuthenticatedRe
       where: { id: milestoneId },
       data: {
         status: 'DONE',
-        completedAt: status === 'DONE' ? new Date() : null,
+        completedAt: new Date(),
       },
     });
 
+    // Recalculate goal progress based on completed milestones
+    const goalWithMilestones = await prisma.goal.findFirst({
+      where: { id, userId },
+      include: {
+        milestones: true,
+      },
+    });
+
+    if (goalWithMilestones) {
+      const totalMilestones = goalWithMilestones.milestones.length;
+      const completedMilestones = goalWithMilestones.milestones.filter(m => m.status === 'DONE').length;
+      const newProgress = totalMilestones > 0 
+        ? Math.round((completedMilestones / totalMilestones) * 100) 
+        : goalWithMilestones.progress;
+
+      // Update goal progress
+      await prisma.goal.update({
+        where: { id: goalWithMilestones.id },
+        data: { progress: newProgress },
+      });
+    }
+
+    // Map dueDate to targetDate for frontend compatibility
+    const milestoneResponse = {
+      ...milestone,
+      targetDate: milestone.dueDate ? milestone.dueDate.toISOString() : null,
+    };
+
     res.json({
       success: true,
-      data: milestone,
+      data: milestoneResponse,
       message: 'Milestone Completed successfully',
     });
   } catch (error) {
@@ -331,9 +436,15 @@ router.post('/:id/milestones', async (req: AuthenticatedRequest, res: Response) 
         .catch(err => logger.error('Failed to schedule milestone notifications:', err));
     }
 
+    // Map dueDate to targetDate for frontend compatibility
+    const milestoneResponse = {
+      ...milestone,
+      targetDate: milestone.dueDate ? milestone.dueDate.toISOString() : null,
+    };
+
     res.status(201).json({
       success: true,
-      data: milestone,
+      data: milestoneResponse,
       message: 'Milestone created successfully',
     });
   } catch (error) {
@@ -380,9 +491,15 @@ router.put('/:id/milestones/:milestoneId', async (req: AuthenticatedRequest, res
 
     logger.info('Milestone updated successfully', { goalId: id, milestoneId, userId });
 
+    // Map dueDate to targetDate for frontend compatibility
+    const milestoneResponse = {
+      ...milestone,
+      targetDate: milestone.dueDate ? milestone.dueDate.toISOString() : null,
+    };
+
     res.json({
       success: true,
-      data: milestone,
+      data: milestoneResponse,
       message: 'Milestone updated successfully',
     });
   } catch (error) {

@@ -60,24 +60,106 @@ router.post('/generate-plan', async (req: AuthenticatedRequest, res: Response) =
     const createdMilestones = [];
     const createdTasks = [];
 
+    // Calculate milestone due dates based on goal target date and milestone durations
+    const now = new Date();
+    now.setHours(0, 0, 0, 0); // Start of today
+    
+    const goalTargetDate = goal.targetDate ? new Date(goal.targetDate) : null;
+    if (goalTargetDate) {
+      goalTargetDate.setHours(23, 59, 59, 999); // Set to end of target day
+    }
+    
+    // Calculate total duration of all milestones
+    const totalDuration = plan.milestones.reduce((sum, m) => sum + m.durationDays, 0);
+    
+    // Calculate cumulative days for milestone due dates
+    let cumulativeDays = 0;
+    
     for (const milestoneData of plan.milestones) {
-      // 
+      cumulativeDays += milestoneData.durationDays;
+      
+      // Calculate milestone due date
+      let milestoneDueDate: Date;
+      
+      if (goal.targetDate && goalTargetDate) {
+        // If goal has target date, distribute milestones from now to target date
+        // The last milestone should end on or before the target date
+        const progressRatio = cumulativeDays / totalDuration;
+        const totalDaysAvailable = Math.ceil((goalTargetDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        const daysFromStart = Math.floor(totalDaysAvailable * progressRatio);
+        
+        milestoneDueDate = new Date(now);
+        milestoneDueDate.setDate(now.getDate() + daysFromStart);
+        
+        // Ensure the last milestone doesn't exceed the target date
+        if (milestoneDueDate > goalTargetDate) {
+          milestoneDueDate = new Date(goalTargetDate);
+        }
+      } else {
+        // If no target date, use milestone durations from today
+        milestoneDueDate = new Date(now);
+        milestoneDueDate.setDate(now.getDate() + cumulativeDays);
+      }
+      
       const milestone = await prisma.milestone.create({
         data: {
           goalId: goal.id,
           title: milestoneData.title,
-          // description: milestoneData.description,
-          // durationDays: milestoneData.durationDays,
+          description: milestoneData.description || null,
+          dueDate: milestoneDueDate,
           status: 'TODO',
         },
       });
       createdMilestones.push(milestone);
+      
+      // Schedule notifications for milestone due date
+      if (milestone.dueDate) {
+        const { scheduleMilestoneDueDateNotifications } = await import('../services/notificationScheduler');
+        scheduleMilestoneDueDateNotifications(milestone.id, goal.id, userId, milestone.dueDate, milestone.title)
+          .catch(err => logger.error('Failed to schedule milestone notifications:', err));
+      }
     }
 
     for (const taskData of plan.tasks) {
       const milestone = createdMilestones[taskData.milestoneIndex];
-      const dueDate = new Date();
-      dueDate.setDate(dueDate.getDate() + taskData.dueOffsetDays);
+      
+      // Calculate task due date based on dueOffsetDays from the start
+      let taskDueDate: Date;
+      
+      if (goal.targetDate && goalTargetDate) {
+        // If goal has target date, calculate task date proportionally
+        const totalDaysAvailable = Math.ceil((goalTargetDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        // Use the maximum duration from all tasks to scale the offset
+        const maxTaskOffset = Math.max(...plan.tasks.map(t => t.dueOffsetDays), 1);
+        const scaledOffset = Math.floor((taskData.dueOffsetDays / maxTaskOffset) * totalDaysAvailable);
+        
+        taskDueDate = new Date(now);
+        taskDueDate.setDate(now.getDate() + scaledOffset);
+        
+        // Ensure task doesn't exceed goal target date
+        if (taskDueDate > goalTargetDate) {
+          taskDueDate = new Date(goalTargetDate);
+        }
+        
+        // If task belongs to a milestone, ensure it doesn't exceed milestone due date
+        if (milestone && milestone.dueDate) {
+          const milestoneDueDate = new Date(milestone.dueDate);
+          if (taskDueDate > milestoneDueDate) {
+            taskDueDate = new Date(milestoneDueDate);
+          }
+        }
+      } else {
+        // If no target date, use dueOffsetDays directly from today
+        taskDueDate = new Date(now);
+        taskDueDate.setDate(now.getDate() + taskData.dueOffsetDays);
+      }
+      
+      // Ensure task is not in the past
+      if (taskDueDate < now) {
+        taskDueDate = new Date(now);
+      }
+      
+      const dueDate = taskDueDate;
 
       const task = await prisma.task.create({
         data: {
@@ -115,11 +197,17 @@ router.post('/generate-plan', async (req: AuthenticatedRequest, res: Response) =
       tasksCount: createdTasks.length,
     });
 
+    // Map milestone dueDate to targetDate for frontend compatibility
+    const milestonesWithTargetDate = createdMilestones.map((milestone: any) => ({
+      ...milestone,
+      targetDate: milestone.dueDate ? milestone.dueDate.toISOString() : null,
+    }));
+
   return  res.json({
       success: true,
       data: {
         plan,
-        milestones: createdMilestones,
+        milestones: milestonesWithTargetDate,
         tasks: createdTasks,
       },
       message: 'Plan generated successfully',

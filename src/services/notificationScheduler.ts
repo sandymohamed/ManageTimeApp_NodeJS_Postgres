@@ -200,6 +200,10 @@ export async function scheduleMilestoneDueDateNotifications(
     const now = new Date();
     const dueDateTime = new Date(dueDate);
     
+    // Set to end of day (23:59) if no specific time is provided
+    // This ensures notifications are sent at the end of the milestone due date
+    dueDateTime.setHours(23, 59, 0, 0);
+    
     // Only schedule if due date is in the future
     if (dueDateTime <= now) {
       logger.info(`Milestone ${milestoneId} due date is in the past, skipping notification scheduling`);
@@ -285,6 +289,103 @@ export async function scheduleMilestoneDueDateNotifications(
     }
   } catch (error) {
     logger.error(`Failed to schedule milestone due date notifications for ${milestoneId}:`, error);
+  }
+}
+
+/**
+ * Check for overdue milestones and send notifications
+ * This should be called periodically (e.g., daily cron job)
+ */
+export async function checkAndNotifyOverdueMilestones(): Promise<void> {
+  try {
+    const prisma = getPrismaClient();
+    const now = new Date();
+    
+    // Find all overdue milestones that are not completed
+    const overdueMilestones = await prisma.milestone.findMany({
+      where: {
+        dueDate: {
+          lt: now,
+        },
+        status: {
+          not: 'DONE',
+        },
+        goal: {
+          status: {
+            not: 'DONE',
+          },
+        },
+      },
+      include: {
+        goal: {
+          select: {
+            id: true,
+            userId: true,
+            title: true,
+          },
+        },
+      },
+    });
+
+    logger.info(`Found ${overdueMilestones.length} overdue milestones`);
+
+    for (const milestone of overdueMilestones) {
+      const userId = milestone.goal.userId;
+      const goalId = milestone.goal.id;
+      
+      // Check if we've already sent an overdue notification for this milestone today
+      const todayStart = new Date(now);
+      todayStart.setHours(0, 0, 0, 0);
+      
+      const existingReminder = await prisma.reminder.findFirst({
+        where: {
+          userId,
+          targetType: 'GOAL',
+          title: {
+            contains: `Overdue Milestone: ${milestone.title}`,
+          },
+          createdAt: {
+            gte: todayStart,
+          },
+        },
+      });
+
+      if (existingReminder) {
+        logger.info(`Overdue notification already sent today for milestone ${milestone.id}`);
+        continue;
+      }
+
+      // Calculate days overdue
+      const daysOverdue = Math.floor((now.getTime() - milestone.dueDate!.getTime()) / (1000 * 60 * 60 * 24));
+
+      // Create reminder for overdue milestone
+      const reminder = await prisma.reminder.create({
+        data: {
+          userId,
+          targetType: 'GOAL',
+          targetId: null,
+          title: `Overdue Milestone: ${milestone.title}`,
+          note: `Your milestone "${milestone.title}" for goal "${milestone.goal.title}" is ${daysOverdue} day${daysOverdue !== 1 ? 's' : ''} overdue.`,
+          triggerType: 'TIME',
+          schedule: {
+            at: now.toISOString(),
+            milestoneId: milestone.id,
+            goalId: goalId,
+          },
+        },
+      });
+
+      // Schedule immediate notification
+      try {
+        await scheduleReminder(reminder.id, userId, now, 'GOAL_REMINDER');
+        logger.info(`Scheduled overdue notification for milestone ${milestone.id}`);
+      } catch (error: any) {
+        logger.error(`Failed to schedule overdue reminder for milestone ${milestone.id}:`, error);
+        await prisma.reminder.delete({ where: { id: reminder.id } }).catch(() => {});
+      }
+    }
+  } catch (error) {
+    logger.error('Failed to check and notify overdue milestones:', error);
   }
 }
 
