@@ -79,14 +79,37 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
       prisma.reminder.count({ where }),
     ]);
 
+    // Filter out reminders for disabled routines
+    const filteredReminders = await Promise.all(
+      reminders.map(async (reminder) => {
+        // Check if this is a routine reminder
+        const schedule = reminder.schedule as any;
+        if (schedule?.routineId && reminder.targetType === 'CUSTOM') {
+          const routine = await prisma.routine.findUnique({
+            where: { id: schedule.routineId },
+            select: { enabled: true, userId: true },
+          });
+
+          // Filter out if routine doesn't exist, is disabled, or doesn't belong to user
+          if (!routine || !routine.enabled || routine.userId !== userId) {
+            return null;
+          }
+        }
+        return reminder;
+      })
+    );
+
+    // Remove null entries
+    const validReminders = filteredReminders.filter((r): r is typeof reminders[0] => r !== null);
+
     res.json({
       success: true,
-      data: reminders,
+      data: validReminders,
       pagination: {
         page: Number(page),
         limit: Number(limit),
-        total,
-        totalPages: Math.ceil(total / Number(limit)),
+        total: validReminders.length, // Note: this is filtered count, not total in DB
+        totalPages: Math.ceil(validReminders.length / Number(limit)),
       },
     });
   } catch (error) {

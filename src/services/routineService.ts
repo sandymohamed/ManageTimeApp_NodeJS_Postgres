@@ -163,6 +163,10 @@ export class RoutineService {
     if (data.schedule) updateData.schedule = data.schedule;
     if (data.timezone) updateData.timezone = data.timezone;
     if (data.reminderBefore !== undefined) updateData.reminderBefore = data.reminderBefore || null;
+    // Handle enabled field - explicitly check for boolean (including false)
+    if (data.enabled !== undefined) {
+      updateData.enabled = data.enabled;
+    }
 
     // Recalculate next occurrence if schedule changed
     if (data.schedule || data.frequency) {

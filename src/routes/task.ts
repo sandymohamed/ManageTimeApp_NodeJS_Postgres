@@ -373,8 +373,21 @@ router.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
 
     // Check if this is a routine task - only allow status updates
     if (id.startsWith('routine_')) {
-      // Extract routine task ID (handle both formats: routine_taskId and routine_taskId_day_X)
-      const routineTaskId = id.replace('routine_', '').split('_day_')[0];
+      // Extract routine task ID (handle multiple formats):
+      // - routine_taskId_day_X (weekly format from backend)
+      // - routine_taskId_yyyy-MM-dd (daily format from calendar)
+      // - routine_taskId (simple format)
+      let routineTaskId = id.replace('routine_', '');
+      
+      // Remove _day_X suffix (e.g., "_day_1" -> "")
+      if (routineTaskId.includes('_day_')) {
+        routineTaskId = routineTaskId.split('_day_')[0];
+      }
+      // Remove date suffix (e.g., "_2025-11-18" -> "")
+      else if (routineTaskId.match(/_\d{4}-\d{2}-\d{2}$/)) {
+        routineTaskId = routineTaskId.replace(/_\d{4}-\d{2}-\d{2}$/, '');
+      }
+      
       const { routineService } = await import('../services/routineService');
       
       // Only allow status updates for routine tasks
@@ -386,13 +399,30 @@ router.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
       
       // Get the updated routine task as a task object
       const routineTasks = await routineService.getRoutineTasksAsTasks(userId);
-      const updatedTask = routineTasks.find(t => t.id === id);
+      
+      // Try to find task by exact ID match first
+      let updatedTask = routineTasks.find(t => t.id === id);
+      
+      // If not found, try to find by routineTaskId in metadata (handles ID format mismatches)
+      if (!updatedTask) {
+        updatedTask = routineTasks.find(t => 
+          t.metadata?.routineTaskId === routineTaskId
+        );
+        
+        // If found by metadata, update the ID to match the requested format
+        if (updatedTask) {
+          updatedTask = {
+            ...updatedTask,
+            id: id, // Use the requested ID format
+          };
+        }
+      }
       
       if (!updatedTask) {
-        throw new NotFoundError('Task');
+        throw new NotFoundError('Task not found');
       }
 
-      logger.info('Routine task updated successfully', { taskId: id, userId });
+      logger.info('Routine task updated successfully', { taskId: id, routineTaskId, userId });
 
       return res.json({
         success: true,

@@ -272,6 +272,57 @@ async function processReminderJob(job: Job): Promise<void> {
         routineReminders: notificationSettings.routineReminders,
       });
     } else if (type === 'ROUTINE_REMINDER') {
+      // Check if the routine is still enabled before sending notification
+      const schedule: any = reminder.schedule as any;
+      let routineId = schedule?.routineId;
+      let routine: { enabled: boolean; userId: string } | null = null;
+      
+      // If routineId is not directly in schedule but taskId is, look up the routine through the task
+      if (!routineId && schedule?.taskId) {
+        const routineTask = await prisma.routineTask.findUnique({
+          where: { id: schedule.taskId },
+          include: { routine: { select: { id: true, enabled: true, userId: true } } },
+        });
+        if (routineTask?.routine) {
+          routineId = routineTask.routine.id;
+          routine = routineTask.routine;
+        }
+      } else if (routineId) {
+        routine = await prisma.routine.findUnique({
+          where: { id: routineId },
+          select: { enabled: true, userId: true },
+        });
+      }
+
+      // Only send notification if routine exists, is enabled, and belongs to the user
+      if (routineId && (!routine || !routine.enabled || routine.userId !== userId)) {
+        shouldSendPush = false;
+        logger.info('Push notification skipped: routine is disabled or not found', {
+          type,
+          userId,
+          reminderId,
+          routineId,
+          taskId: schedule?.taskId,
+          routineEnabled: routine?.enabled,
+          routineExists: !!routine,
+        });
+        
+        // Cancel the reminder if routine is disabled
+        if (!routine || !routine.enabled) {
+          logger.info(`Skipping reschedule for reminder ${reminderId}: routine is disabled`, {
+            reminderId,
+            routineId,
+            enabled: routine?.enabled,
+          });
+          // Cancel the reminder if routine is disabled
+          await prisma.reminder.delete({
+            where: { id: reminderId },
+          }).catch(err => logger.error(`Failed to delete reminder ${reminderId}:`, err));
+          logger.info(`Reminder job completed (cancelled due to disabled routine): ${reminderId}`);
+          return;
+        }
+      }
+
       // Log when routine reminders are enabled
       logger.debug('Routine reminder notification enabled', {
         type,
@@ -338,6 +389,29 @@ async function processReminderJob(job: Job): Promise<void> {
       // For routine reminders, calculate next reminder time (routine time - reminderBefore)
       let next: Date | null = null;
       if (type === 'ROUTINE_REMINDER' && schedule.reminderBefore) {
+        // Check if routine is still enabled before rescheduling
+        if (schedule.routineId) {
+          const routine = await prisma.routine.findUnique({
+            where: { id: schedule.routineId },
+            select: { enabled: true, userId: true },
+          });
+
+          if (!routine || !routine.enabled || routine.userId !== userId) {
+            logger.info(`Skipping reschedule for reminder ${reminderId}: routine is disabled or not found`, {
+              reminderId,
+              routineId: schedule.routineId,
+              enabled: routine?.enabled,
+              routineExists: !!routine,
+            });
+            // Cancel the reminder if routine is disabled
+            await prisma.reminder.delete({
+              where: { id: reminderId },
+            }).catch(err => logger.error(`Failed to delete reminder ${reminderId}:`, err));
+            logger.info(`Reminder job completed (cancelled due to disabled routine during reschedule): ${reminderId}`);
+            return;
+          }
+        }
+
         // Calculate next routine occurrence
         const routineNext = computeNextOccurrence(schedule, scheduleTimezone);
         if (routineNext) {

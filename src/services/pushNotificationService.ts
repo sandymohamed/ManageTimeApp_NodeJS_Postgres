@@ -185,8 +185,6 @@ class PushNotificationService {
               ...(imageUrl ? { imageUrl } : {}),
               // Ensure notification is shown even when app is in foreground
               visibility: 'public' as const,
-              // Make notification sticky/important
-              importance: 'high' as const,
             },
           },
           apns: {

@@ -375,10 +375,12 @@ export async function checkAndNotifyOverdueMilestones(): Promise<void> {
         },
       });
 
-      // Schedule immediate notification
+      // Send notification immediately (for overdue milestones, we don't schedule in the past)
       try {
-        await scheduleReminder(reminder.id, userId, now, 'GOAL_REMINDER');
-        logger.info(`Scheduled overdue notification for milestone ${milestone.id}`);
+        // Schedule for 1 second in the future to avoid "Cannot schedule reminder in the past" error
+        const immediateTime = new Date(Date.now() + 1000);
+        await scheduleReminder(reminder.id, userId, immediateTime, 'GOAL_REMINDER');
+        logger.info(`Scheduled overdue notification for milestone ${milestone.id} (immediate)`);
       } catch (error: any) {
         logger.error(`Failed to schedule overdue reminder for milestone ${milestone.id}:`, error);
         await prisma.reminder.delete({ where: { id: reminder.id } }).catch(() => {});
