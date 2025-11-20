@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -66,9 +99,32 @@ router.get('/', async (req, res) => {
             }),
             prisma.goal.count({ where }),
         ]);
+        const goalsWithProgress = await Promise.all(goals.map(async (goal) => {
+            const totalMilestones = goal.milestones.length;
+            const completedMilestones = goal.milestones.filter((m) => m.status && (m.status.toUpperCase() === 'DONE' || m.status === 'DONE')).length;
+            const calculatedProgress = totalMilestones > 0
+                ? Math.round((completedMilestones / totalMilestones) * 100)
+                : (goal.progress || 0);
+            if (calculatedProgress !== (goal.progress || 0)) {
+                await prisma.goal.update({
+                    where: { id: goal.id },
+                    data: { progress: calculatedProgress },
+                });
+            }
+            return {
+                ...goal,
+                progress: calculatedProgress,
+                milestones: goal.milestones.map((milestone) => ({
+                    ...milestone,
+                    targetDate: milestone.dueDate ? milestone.dueDate.toISOString() : null,
+                })),
+            };
+        }));
+        const { checkAndNotifyOverdueMilestones } = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
+        checkAndNotifyOverdueMilestones().catch(err => logger_1.logger.error('Failed to check overdue milestones:', err));
         res.json({
             success: true,
-            data: goals,
+            data: goalsWithProgress,
             pagination: {
                 page: Number(page),
                 limit: Number(limit),
@@ -115,9 +171,32 @@ router.get('/:id', async (req, res) => {
         if (!goal) {
             throw new types_1.NotFoundError('Goal');
         }
+        const totalMilestones = goal.milestones.length;
+        const completedMilestones = goal.milestones.filter((m) => m.status && (m.status.toUpperCase() === 'DONE' || m.status === 'DONE')).length;
+        const calculatedProgress = totalMilestones > 0
+            ? Math.round((completedMilestones / totalMilestones) * 100)
+            : (goal.progress || 0);
+        logger_1.logger.info(`Goal ${goal.id} progress calculation: ${completedMilestones}/${totalMilestones} = ${calculatedProgress}%`);
+        if (calculatedProgress !== (goal.progress || 0)) {
+            await prisma.goal.update({
+                where: { id: goal.id },
+                data: { progress: calculatedProgress },
+            });
+            goal.progress = calculatedProgress;
+        }
+        const { checkAndNotifyOverdueMilestones } = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
+        checkAndNotifyOverdueMilestones().catch(err => logger_1.logger.error('Failed to check overdue milestones:', err));
+        const goalWithMappedMilestones = {
+            ...goal,
+            progress: calculatedProgress,
+            milestones: goal.milestones.map((milestone) => ({
+                ...milestone,
+                targetDate: milestone.dueDate ? milestone.dueDate.toISOString() : null,
+            })),
+        };
         res.json({
             success: true,
-            data: goal,
+            data: goalWithMappedMilestones,
         });
     }
     catch (error) {
@@ -133,11 +212,13 @@ router.post('/', async (req, res) => {
         }
         const userId = req.user.id;
         const prisma = (0, database_1.getPrismaClient)();
+        const goalData = {
+            ...value,
+            status: value.status || 'ACTIVE',
+            userId,
+        };
         const goal = await prisma.goal.create({
-            data: {
-                ...value,
-                userId,
-            },
+            data: goalData,
             include: {
                 milestones: true,
                 _count: {
@@ -145,6 +226,11 @@ router.post('/', async (req, res) => {
                 },
             },
         });
+        if (goal.targetDate) {
+            const { scheduleGoalTargetDateNotifications } = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
+            scheduleGoalTargetDateNotifications(goal.id, userId, goal.targetDate, goal.title)
+                .catch(err => logger_1.logger.error('Failed to schedule goal notifications:', err));
+        }
         logger_1.logger.info('Goal created successfully', { goalId: goal.id, userId });
         res.status(201).json({
             success: true,
@@ -184,6 +270,11 @@ router.put('/:id', async (req, res) => {
                 },
             },
         });
+        if (value.targetDate !== undefined && updatedGoal.targetDate) {
+            const { scheduleGoalTargetDateNotifications } = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
+            scheduleGoalTargetDateNotifications(updatedGoal.id, userId, updatedGoal.targetDate, updatedGoal.title)
+                .catch(err => logger_1.logger.error('Failed to reschedule goal notifications:', err));
+        }
         logger_1.logger.info('Goal updated successfully', { goalId: id, userId });
         res.json({
             success: true,
@@ -224,7 +315,6 @@ router.delete('/:id', async (req, res) => {
 router.post('/:id/milestones/:milestoneId/complete', async (req, res) => {
     try {
         const { id, milestoneId } = req.params;
-        const { status, } = req.body;
         const userId = req.user.id;
         const prisma = (0, database_1.getPrismaClient)();
         const goal = await prisma.goal.findFirst({
@@ -237,12 +327,33 @@ router.post('/:id/milestones/:milestoneId/complete', async (req, res) => {
             where: { id: milestoneId },
             data: {
                 status: 'DONE',
-                completedAt: status === 'DONE' ? new Date() : null,
+                completedAt: new Date(),
             },
         });
+        const goalWithMilestones = await prisma.goal.findFirst({
+            where: { id, userId },
+            include: {
+                milestones: true,
+            },
+        });
+        if (goalWithMilestones) {
+            const totalMilestones = goalWithMilestones.milestones.length;
+            const completedMilestones = goalWithMilestones.milestones.filter(m => m.status === 'DONE').length;
+            const newProgress = totalMilestones > 0
+                ? Math.round((completedMilestones / totalMilestones) * 100)
+                : goalWithMilestones.progress;
+            await prisma.goal.update({
+                where: { id: goalWithMilestones.id },
+                data: { progress: newProgress },
+            });
+        }
+        const milestoneResponse = {
+            ...milestone,
+            targetDate: milestone.dueDate ? milestone.dueDate.toISOString() : null,
+        };
         res.json({
             success: true,
-            data: milestone,
+            data: milestoneResponse,
             message: 'Milestone Completed successfully',
         });
     }
@@ -254,7 +365,7 @@ router.post('/:id/milestones/:milestoneId/complete', async (req, res) => {
 router.post('/:id/milestones', async (req, res) => {
     try {
         const { id } = req.params;
-        const { title, description, dueDate, weight } = req.body;
+        const { title, dueDate, weight } = req.body;
         const userId = req.user.id;
         const prisma = (0, database_1.getPrismaClient)();
         const goal = await prisma.goal.findFirst({
@@ -272,9 +383,18 @@ router.post('/:id/milestones', async (req, res) => {
                 status: 'TODO',
             },
         });
+        if (milestone.dueDate) {
+            const { scheduleMilestoneDueDateNotifications } = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
+            scheduleMilestoneDueDateNotifications(milestone.id, id, userId, milestone.dueDate, milestone.title)
+                .catch(err => logger_1.logger.error('Failed to schedule milestone notifications:', err));
+        }
+        const milestoneResponse = {
+            ...milestone,
+            targetDate: milestone.dueDate ? milestone.dueDate.toISOString() : null,
+        };
         res.status(201).json({
             success: true,
-            data: milestone,
+            data: milestoneResponse,
             message: 'Milestone created successfully',
         });
     }
@@ -306,10 +426,19 @@ router.put('/:id/milestones/:milestoneId', async (req, res) => {
                 completedAt: completedAt ? new Date(completedAt) : null,
             },
         });
+        if (dueDate !== undefined && milestone.dueDate) {
+            const { scheduleMilestoneDueDateNotifications } = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
+            scheduleMilestoneDueDateNotifications(milestone.id, id, userId, milestone.dueDate, milestone.title)
+                .catch(err => logger_1.logger.error('Failed to reschedule milestone notifications:', err));
+        }
         logger_1.logger.info('Milestone updated successfully', { goalId: id, milestoneId, userId });
+        const milestoneResponse = {
+            ...milestone,
+            targetDate: milestone.dueDate ? milestone.dueDate.toISOString() : null,
+        };
         res.json({
             success: true,
-            data: milestone,
+            data: milestoneResponse,
             message: 'Milestone updated successfully',
         });
     }

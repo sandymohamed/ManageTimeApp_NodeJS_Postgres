@@ -15,7 +15,6 @@ const authenticateToken = async (req, res, next) => {
             throw new types_1.AuthenticationError('Access token required');
         }
         const decoded = jsonwebtoken_1.default.verify(token, process.env.JWT_SECRET);
-        console.log('decoded in authenticateToken', decoded);
         const prisma = (0, database_1.getPrismaClient)();
         const user = await prisma.user.findUnique({
             where: { id: decoded.userId },

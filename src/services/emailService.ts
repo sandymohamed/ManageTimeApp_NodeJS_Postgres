@@ -71,7 +71,7 @@ class EmailService {
     const { email, inviterName, projectName, projectDescription, role, expiresAt } = data;
 
     const subject = `New project invitation: "${projectName}"`;
-    console.log("Sending invitation notification to: ", email);
+    logger.info("Sending invitation notification", { email, projectName });
     
     const html = `
       <!DOCTYPE html>
@@ -201,7 +201,7 @@ Manage Time App
     projectName: string;
     acceptedBy: string;
   }): Promise<boolean> {
-    const { inviterEmail, inviterName, projectName, acceptedBy } = data;
+    const { inviterEmail, projectName, acceptedBy } = data;
 
     const subject = `Invitation accepted for "${projectName}" project`;
     
@@ -250,7 +250,7 @@ Manage Time App
     projectName: string;
     declinedBy: string;
   }): Promise<boolean> {
-    const { inviterEmail, inviterName, projectName, declinedBy } = data;
+    const { inviterEmail, projectName, declinedBy } = data;
 
     const subject = `Invitation declined for "${projectName}" project`;
     

@@ -63,23 +63,34 @@ router.get('/', async (req, res) => {
         if (triggerType) {
             where.triggerType = triggerType;
         }
-        const [reminders, total] = await Promise.all([
-            prisma.reminder.findMany({
-                where,
-                orderBy: { createdAt: 'desc' },
-                skip: (Number(page) - 1) * Number(limit),
-                take: Number(limit),
-            }),
-            prisma.reminder.count({ where }),
-        ]);
+        const reminders = await prisma.reminder.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            skip: (Number(page) - 1) * Number(limit),
+            take: Number(limit),
+        });
+        const filteredReminders = await Promise.all(reminders.map(async (reminder) => {
+            const schedule = reminder.schedule;
+            if (schedule?.routineId && reminder.targetType === 'CUSTOM') {
+                const routine = await prisma.routine.findUnique({
+                    where: { id: schedule.routineId },
+                    select: { enabled: true, userId: true },
+                });
+                if (!routine || !routine.enabled || routine.userId !== userId) {
+                    return null;
+                }
+            }
+            return reminder;
+        }));
+        const validReminders = filteredReminders.filter((r) => r !== null);
         res.json({
             success: true,
-            data: reminders,
+            data: validReminders,
             pagination: {
                 page: Number(page),
                 limit: Number(limit),
-                total,
-                totalPages: Math.ceil(total / Number(limit)),
+                total: validReminders.length,
+                totalPages: Math.ceil(validReminders.length / Number(limit)),
             },
         });
     }

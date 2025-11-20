@@ -29,6 +29,11 @@ declare class EmailService {
         projectName: string;
         declinedBy: string;
     }): Promise<boolean>;
+    sendPasswordResetOTP(data: {
+        email: string;
+        otp: string;
+        name?: string;
+    }): Promise<boolean>;
 }
 export declare const emailService: EmailService;
 export {};

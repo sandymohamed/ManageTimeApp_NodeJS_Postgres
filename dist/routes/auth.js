@@ -29,6 +29,17 @@ const changePasswordSchema = joi_1.default.object({
     currentPassword: joi_1.default.string().required(),
     newPassword: joi_1.default.string().min(8).required(),
 });
+const forgotPasswordSchema = joi_1.default.object({
+    email: joi_1.default.string().email().required(),
+});
+const verifyOTPSchema = joi_1.default.object({
+    email: joi_1.default.string().email().required(),
+    otp: joi_1.default.string().length(6).pattern(/^\d+$/).required(),
+});
+const resetPasswordSchema = joi_1.default.object({
+    token: joi_1.default.string().uuid().required(),
+    newPassword: joi_1.default.string().min(8).required(),
+});
 router.post('/signup', async (req, res) => {
     try {
         const { error, value } = signupSchema.validate(req.body);
@@ -50,13 +61,10 @@ router.post('/signup', async (req, res) => {
 router.post('/login', async (req, res) => {
     try {
         const { error, value } = loginSchema.validate(req.body);
-        console.log('🔍 Login request:', value);
-        console.log('🔍 Login request   error:', error);
         if (error) {
             throw new types_1.ValidationError(error.details[0].message);
         }
         const result = await authService_1.AuthService.login(value);
-        console.log('🔍 Login result:', result);
         res.json({
             success: true,
             data: result,
@@ -82,8 +90,18 @@ router.post('/refresh', async (req, res) => {
         });
     }
     catch (error) {
-        logger_1.logger.error('Token refresh error:', error);
-        throw error;
+        const statusCode = error.statusCode || 401;
+        logger_1.logger.error('Token refresh error:', {
+            message: error.message,
+            statusCode,
+            stack: error.stack,
+            isOperational: error.isOperational,
+        });
+        res.status(statusCode).json({
+            success: false,
+            error: error.message || 'Invalid refresh token',
+            message: error.message || 'Invalid refresh token',
+        });
     }
 });
 router.post('/logout', async (req, res) => {
@@ -140,6 +158,58 @@ router.post('/change-password', async (req, res) => {
     }
     catch (error) {
         logger_1.logger.error('Change password error:', error);
+        throw error;
+    }
+});
+router.post('/forgot-password', async (req, res) => {
+    try {
+        const { error, value } = forgotPasswordSchema.validate(req.body);
+        if (error) {
+            throw new types_1.ValidationError(error.details[0].message);
+        }
+        await authService_1.AuthService.requestPasswordReset(value.email);
+        res.json({
+            success: true,
+            message: 'If an account with that email exists, an OTP has been sent to your email.',
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Forgot password error:', error);
+        throw error;
+    }
+});
+router.post('/verify-otp', async (req, res) => {
+    try {
+        const { error, value } = verifyOTPSchema.validate(req.body);
+        if (error) {
+            throw new types_1.ValidationError(error.details[0].message);
+        }
+        const token = await authService_1.AuthService.verifyPasswordResetOTP(value.email, value.otp);
+        res.json({
+            success: true,
+            data: { token },
+            message: 'OTP verified successfully. You can now reset your password.',
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Verify OTP error:', error);
+        throw error;
+    }
+});
+router.post('/reset-password', async (req, res) => {
+    try {
+        const { error, value } = resetPasswordSchema.validate(req.body);
+        if (error) {
+            throw new types_1.ValidationError(error.details[0].message);
+        }
+        await authService_1.AuthService.resetPassword(value.token, value.newPassword);
+        res.json({
+            success: true,
+            message: 'Password reset successfully. Please login with your new password.',
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Reset password error:', error);
         throw error;
     }
 });

@@ -217,7 +217,7 @@ Important rules:
   }
 
   // Generate a simple plan for testing
-  async generateSimplePlan(goalTitle: string): Promise<GeneratedPlan> {
+  async generateSimplePlan(_goalTitle: string): Promise<GeneratedPlan> {
     return {
       milestones: [
         {

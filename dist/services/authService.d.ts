@@ -27,5 +27,8 @@ export declare class AuthService {
     static logout(refreshToken?: string): Promise<void>;
     static logoutAll(userId: string): Promise<void>;
     static changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void>;
+    static requestPasswordReset(email: string): Promise<void>;
+    static verifyPasswordResetOTP(email: string, otp: string): Promise<string>;
+    static resetPassword(token: string, newPassword: string): Promise<void>;
 }
 //# sourceMappingURL=authService.d.ts.map

@@ -69,15 +69,12 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
       where.triggerType = triggerType;
     }
 
-    const [reminders, total] = await Promise.all([
-      prisma.reminder.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
-      }),
-      prisma.reminder.count({ where }),
-    ]);
+    const reminders = await prisma.reminder.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (Number(page) - 1) * Number(limit),
+      take: Number(limit),
+    });
 
     // Filter out reminders for disabled routines
     const filteredReminders = await Promise.all(

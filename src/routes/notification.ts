@@ -1,8 +1,8 @@
-import { Router, Request, Response } from 'express';
-import Joi from 'joi';
+import { Router, Response } from 'express';
 import { notificationService } from '../services/notificationService';
 import { AuthenticatedRequest } from '../types';
 import { authenticateToken } from '../middleware/auth';
+import { logger } from '../utils/logger';
 
 const router = Router();
 
@@ -20,7 +20,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
       data: notifications,
     });
   } catch (error: any) {
-    console.error('Get notifications error:', error);
+    logger.error('Get notifications error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to get notifications',
@@ -32,9 +32,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
 // GET /api/v1/notifications/unread-count - Get unread notification count
 router.get('/unread-count', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    console.log('req.user', req.user);
     const userId = req.user!.id;
-    console.log('userId', userId);
     const count = await notificationService.getUnreadNotificationCount(userId);
 
     res.json({
@@ -42,7 +40,7 @@ router.get('/unread-count', async (req: AuthenticatedRequest, res: Response) => 
       data: { count },
     });
   } catch (error: any) {
-    console.error('Get unread count error:', error);
+    logger.error('Get unread count error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to get unread count',
@@ -63,7 +61,7 @@ router.put('/:id/read', async (req: AuthenticatedRequest, res: Response) => {
       message: 'Notification marked as read',
     });
   } catch (error: any) {
-    console.error('Mark notification as read error:', error);
+    logger.error('Mark notification as read error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to mark notification as read',
@@ -84,7 +82,7 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
       message: 'Notification deleted',
     });
   } catch (error: any) {
-    console.error('Delete notification error:', error);
+    logger.error('Delete notification error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to delete notification',

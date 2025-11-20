@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -8,6 +41,7 @@ const joi_1 = __importDefault(require("joi"));
 const auth_1 = require("../middleware/auth");
 const logger_1 = require("../utils/logger");
 const routineService_1 = require("../services/routineService");
+const notificationScheduler_1 = require("../services/notificationScheduler");
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticateToken);
 const createRoutineSchema = joi_1.default.object({
@@ -20,6 +54,7 @@ const createRoutineSchema = joi_1.default.object({
         day: joi_1.default.number().min(1).max(31).optional(),
     }).required(),
     timezone: joi_1.default.string().optional().default('UTC'),
+    reminderBefore: joi_1.default.string().pattern(/^\d+[hdw]$/).optional().allow(null, ''),
 });
 const updateRoutineSchema = joi_1.default.object({
     title: joi_1.default.string().trim().min(1).optional(),
@@ -32,6 +67,7 @@ const updateRoutineSchema = joi_1.default.object({
     }).optional(),
     timezone: joi_1.default.string().optional(),
     enabled: joi_1.default.boolean().optional(),
+    reminderBefore: joi_1.default.string().pattern(/^\d+[hdw]$/).optional().allow(null, ''),
 });
 const createTaskSchema = joi_1.default.object({
     title: joi_1.default.string().required(),
@@ -69,7 +105,14 @@ router.post('/', async (req, res) => {
         if (value.description === '' || value.description === null) {
             value.description = undefined;
         }
+        if (value.reminderBefore === '' || value.reminderBefore === null) {
+            value.reminderBefore = undefined;
+        }
         const routine = await routineService_1.routineService.createRoutine(userId, value);
+        if (routine.enabled) {
+            (0, notificationScheduler_1.scheduleRoutineNotifications)(routine.id, userId)
+                .catch(err => logger_1.logger.error('Failed to schedule routine notifications:', err));
+        }
         return res.status(201).json({
             success: true,
             data: routine,
@@ -121,7 +164,19 @@ router.put('/:routineId', async (req, res) => {
         if (value.description === '' || value.description === null) {
             value.description = undefined;
         }
+        if (value.reminderBefore === '' || value.reminderBefore === null) {
+            value.reminderBefore = undefined;
+        }
         const routine = await routineService_1.routineService.updateRoutine(routineId, userId, value);
+        if (routine.enabled) {
+            await (0, notificationScheduler_1.cancelRoutineNotifications)(routineId, userId);
+            (0, notificationScheduler_1.scheduleRoutineNotifications)(routineId, userId)
+                .catch(err => logger_1.logger.error('Failed to schedule routine notifications:', err));
+        }
+        else {
+            (0, notificationScheduler_1.cancelRoutineNotifications)(routineId, userId)
+                .catch(err => logger_1.logger.error('Failed to cancel routine notifications:', err));
+        }
         return res.json({
             success: true,
             data: routine,
@@ -140,6 +195,8 @@ router.delete('/:routineId', async (req, res) => {
         const userId = req.user.id;
         const { routineId } = req.params;
         await routineService_1.routineService.deleteRoutine(routineId, userId);
+        (0, notificationScheduler_1.cancelRoutineNotifications)(routineId, userId)
+            .catch(err => logger_1.logger.error('Failed to cancel routine notifications:', err));
         return res.json({
             success: true,
             message: 'Routine deleted successfully',
@@ -165,6 +222,11 @@ router.post('/:routineId/tasks', async (req, res) => {
             });
         }
         const task = await routineService_1.routineService.addTaskToRoutine(routineId, userId, value);
+        const routine = await routineService_1.routineService.getRoutineById(routineId, userId);
+        if (routine && routine.enabled) {
+            const schedule = routine.schedule;
+            (0, notificationScheduler_1.scheduleRoutineTaskNotifications)(routineId, userId, routine.title, routine.frequency, schedule, routine.timezone, task.id, task.title, task.reminderTime).catch(err => logger_1.logger.error('Failed to schedule routine task notification:', err));
+        }
         return res.status(201).json({
             success: true,
             data: task,
@@ -182,7 +244,29 @@ router.put('/tasks/:taskId', async (req, res) => {
     try {
         const userId = req.user.id;
         const { taskId } = req.params;
+        const { getPrismaClient } = await Promise.resolve().then(() => __importStar(require('../utils/database')));
+        const prisma = getPrismaClient();
+        const existingTask = await prisma.routineTask.findUnique({
+            where: { id: taskId },
+            include: { routine: true },
+        });
+        if (!existingTask || existingTask.routine.userId !== userId) {
+            return res.status(404).json({
+                success: false,
+                message: 'Task not found',
+            });
+        }
         const task = await routineService_1.routineService.updateRoutineTask(taskId, userId, req.body);
+        const routine = existingTask.routine;
+        if (routine.enabled) {
+            await (0, notificationScheduler_1.cancelRoutineTaskNotifications)(taskId, userId);
+            const schedule = routine.schedule;
+            (0, notificationScheduler_1.scheduleRoutineTaskNotifications)(routine.id, userId, routine.title, routine.frequency, schedule, routine.timezone, task.id, task.title, task.reminderTime).catch(err => logger_1.logger.error('Failed to schedule routine task notification:', err));
+        }
+        else {
+            (0, notificationScheduler_1.cancelRoutineTaskNotifications)(taskId, userId)
+                .catch(err => logger_1.logger.error('Failed to cancel routine task notification:', err));
+        }
         return res.json({
             success: true,
             data: task,
@@ -201,6 +285,8 @@ router.delete('/tasks/:taskId', async (req, res) => {
         const userId = req.user.id;
         const { taskId } = req.params;
         await routineService_1.routineService.deleteRoutineTask(taskId, userId);
+        (0, notificationScheduler_1.cancelRoutineTaskNotifications)(taskId, userId)
+            .catch(err => logger_1.logger.error('Failed to cancel routine task notification:', err));
         return res.json({
             success: true,
             message: 'Task deleted successfully',
@@ -235,8 +321,20 @@ router.put('/tasks/:taskId/toggle', async (req, res) => {
 });
 router.post('/:routineId/reset', async (req, res) => {
     try {
+        const userId = req.user.id;
         const { routineId } = req.params;
+        const routine = await routineService_1.routineService.getRoutineById(routineId, userId);
+        if (!routine) {
+            return res.status(404).json({
+                success: false,
+                message: 'Routine not found',
+            });
+        }
         await routineService_1.routineService.resetRoutineTasks(routineId);
+        if (routine.enabled) {
+            (0, notificationScheduler_1.scheduleRoutineNotifications)(routineId, userId)
+                .catch(err => logger_1.logger.error('Failed to reschedule routine notifications after reset:', err));
+        }
         return res.json({
             success: true,
             message: 'Routine reset successfully',

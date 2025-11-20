@@ -2,6 +2,7 @@ import { GeneratedPlan } from '../types';
 declare class AIService {
     private static instance;
     private openai;
+    private model;
     constructor();
     static getInstance(): AIService;
     generatePlan(goalTitle: string, goalDescription: string, targetDate: string, options?: {
@@ -15,7 +16,7 @@ declare class AIService {
     private parseResponse;
     private validateMilestones;
     private validateTasks;
-    generateSimplePlan(goalTitle: string): Promise<GeneratedPlan>;
+    generateSimplePlan(_goalTitle: string): Promise<GeneratedPlan>;
 }
 export declare const aiService: AIService;
 export {};

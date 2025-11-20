@@ -129,7 +129,7 @@ const initializeWorkers = async (): Promise<void> => {
 // Job processing functions
 
 // --- Helper: compute next occurrence for simple schedules ---
-function computeNextOccurrence(schedule: any, timezone: string): Date | null {
+function computeNextOccurrence(schedule: any, _timezone: string): Date | null {
   try {
     if (!schedule || typeof schedule !== 'object') {
       logger.debug('computeNextOccurrence: schedule is not an object', { schedule });
@@ -441,7 +441,7 @@ async function processReminderJob(job: Job): Promise<void> {
               
               // Calculate the next routine occurrence after the current one
               // We need to find the next routine occurrence that gives us a future reminder time
-              let nextRoutineOccurrence = new Date(routineNext);
+              const nextRoutineOccurrence = new Date(routineNext);
               let attempts = 0;
               const maxAttempts = 12; // Prevent infinite loop (e.g., 12 months for monthly)
               
@@ -535,7 +535,7 @@ async function processReminderJob(job: Job): Promise<void> {
 }
 
 async function processNotificationJob(job: Job): Promise<void> {
-  const { notificationId, userId, type, payload } = job.data;
+  const { notificationId, userId, type } = job.data;
 
   logger.info(`Processing notification job: ${notificationId}`);
 
@@ -634,7 +634,7 @@ async function processNotificationJob(job: Job): Promise<void> {
 }
 
 async function processAIPlanGenerationJob(job: Job): Promise<void> {
-  const { goalId, userId, promptOptions } = job.data;
+  const { goalId } = job.data;
 
   logger.info(`Processing AI plan generation job: ${goalId}`);
 
@@ -653,7 +653,8 @@ async function processAIPlanGenerationJob(job: Job): Promise<void> {
 }
 
 async function processEmailJob(job: Job): Promise<void> {
-  const { to, subject, body, template, data } = job.data;
+  const { to } = job.data;
+  // TODO: Extract and use subject, body, template, data when implementing email sending
 
   logger.info(`Processing email job: ${to}`);
 

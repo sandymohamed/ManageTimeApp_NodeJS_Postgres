@@ -248,7 +248,7 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
 
     logger.info('Alarm deleted successfully', { alarmId: id, userId });
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Alarm deleted successfully',
     });
@@ -263,7 +263,10 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
     }
     
     logger.error('Failed to delete alarm:', error);
-    throw error;
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to delete alarm',
+    });
   }
 });
 
@@ -319,7 +322,7 @@ router.post('/:id/dismiss', async (req: AuthenticatedRequest, res: Response) => 
     // TODO: Implement dismiss logic (e.g., mark as dismissed, update last dismissed time)
     logger.info('Alarm dismissed', { alarmId: id, userId });
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Alarm dismissed successfully',
     });
@@ -334,7 +337,10 @@ router.post('/:id/dismiss', async (req: AuthenticatedRequest, res: Response) => 
     }
     
     logger.error('Failed to dismiss alarm:', error);
-    throw error;
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to dismiss alarm',
+    });
   }
 });
 

@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import Joi from 'joi';
 import { getPrismaClient } from '../utils/database';
 import { authenticateToken } from '../middleware/auth';
-import { AuthenticatedRequest, ValidationError, NotFoundError, AuthorizationError } from '../types';
+import { AuthenticatedRequest, ValidationError, NotFoundError } from '../types';
 import { logger } from '../utils/logger';
 
 const router = Router();

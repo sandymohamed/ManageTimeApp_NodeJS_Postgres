@@ -1,4 +1,5 @@
 import admin from 'firebase-admin';
+import * as fs from 'fs';
 import { logger } from '../utils/logger';
 import { getPrismaClient } from '../utils/database';
 
@@ -26,7 +27,9 @@ function initializeFirebase(): void {
 
       if (serviceAccountPath) {
         logger.info('Initializing Firebase Admin SDK from service account path');
-        const serviceAccount = require(serviceAccountPath);
+        // Read service account file synchronously
+        const serviceAccountContent = fs.readFileSync(serviceAccountPath, 'utf8');
+        const serviceAccount = JSON.parse(serviceAccountContent);
         admin.initializeApp({
           credential: admin.credential.cert(serviceAccount),
         });
@@ -91,7 +94,6 @@ class PushNotificationService {
    * Get user's push tokens from database
    */
   async getUserPushTokens(userId: string): Promise<UserPushToken[]> {
-    console.log('getUserPushTokens', userId);
     try {
       const prisma = getPrismaClient();
       const user = await prisma.user.findUnique({
@@ -105,7 +107,7 @@ class PushNotificationService {
 
       const settings = user.settings as any;
       const pushTokens = settings.pushTokens || [];
-      console.log('pushTokens', pushTokens);
+      logger.debug('Retrieved push tokens for user', { userId, tokenCount: pushTokens.length });
       return pushTokens.filter((token: UserPushToken) => {
         // Filter out expired tokens (older than 30 days)
         const registeredAt = new Date(token.registeredAt);

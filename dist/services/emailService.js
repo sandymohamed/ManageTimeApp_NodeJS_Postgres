@@ -51,7 +51,7 @@ class EmailService {
     async sendProjectInvitationNotification(data) {
         const { email, inviterName, projectName, projectDescription, role, expiresAt } = data;
         const subject = `New project invitation: "${projectName}"`;
-        console.log("Sending invitation notification to: ", email);
+        logger_1.logger.info("Sending invitation notification", { email, projectName });
         const html = `
       <!DOCTYPE html>
       <html>
@@ -172,7 +172,7 @@ Manage Time App
         });
     }
     async sendInvitationAcceptedNotification(data) {
-        const { inviterEmail, inviterName, projectName, acceptedBy } = data;
+        const { inviterEmail, projectName, acceptedBy } = data;
         const subject = `Invitation accepted for "${projectName}" project`;
         const html = `
       <!DOCTYPE html>
@@ -212,7 +212,7 @@ Manage Time App
         });
     }
     async sendInvitationDeclinedNotification(data) {
-        const { inviterEmail, inviterName, projectName, declinedBy } = data;
+        const { inviterEmail, projectName, declinedBy } = data;
         const subject = `Invitation declined for "${projectName}" project`;
         const html = `
       <!DOCTYPE html>
@@ -249,6 +249,83 @@ Manage Time App
             to: inviterEmail,
             subject,
             html,
+        });
+    }
+    async sendPasswordResetOTP(data) {
+        const { email, otp, name } = data;
+        const subject = 'Password Reset - OTP Code';
+        const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Password Reset OTP</title>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+          .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+          .otp-box { background: white; padding: 30px; border-radius: 8px; margin: 20px 0; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+          .otp-code { font-size: 36px; font-weight: bold; color: #667eea; letter-spacing: 8px; margin: 20px 0; font-family: 'Courier New', monospace; }
+          .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0; }
+          .footer { text-align: center; margin-top: 30px; color: #666; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1>🔐 Password Reset</h1>
+          <p>Your OTP code is ready</p>
+        </div>
+        
+        <div class="content">
+          <h2>Hello${name ? ` ${name}` : ''}!</h2>
+          <p>You requested to reset your password. Use the OTP code below to verify your identity:</p>
+          
+          <div class="otp-box">
+            <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">Your OTP Code:</p>
+            <div class="otp-code">${otp}</div>
+            <p style="margin: 10px 0 0 0; color: #666; font-size: 12px;">This code expires in 10 minutes</p>
+          </div>
+          
+          <div class="warning">
+            <strong>⚠️ Security Notice:</strong> If you didn't request this password reset, please ignore this email. Your password will remain unchanged.
+          </div>
+          
+          <p style="color: #666; font-size: 14px;">
+            Enter this code in the app to continue with your password reset process.
+          </p>
+        </div>
+        
+        <div class="footer">
+          <p>This email was sent by Manage Time App</p>
+          <p>For security reasons, this OTP will expire in 10 minutes.</p>
+        </div>
+      </body>
+      </html>
+    `;
+        const text = `
+Password Reset - OTP Code
+
+Hello${name ? ` ${name}` : ''}!
+
+You requested to reset your password. Use the OTP code below to verify your identity:
+
+OTP Code: ${otp}
+
+This code expires in 10 minutes.
+
+If you didn't request this password reset, please ignore this email. Your password will remain unchanged.
+
+Enter this code in the app to continue with your password reset process.
+
+---
+Manage Time App
+    `;
+        return await this.sendEmail({
+            to: email,
+            subject,
+            html,
+            text,
         });
     }
 }

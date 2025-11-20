@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.routineService = exports.RoutineService = void 0;
 const database_1 = require("../utils/database");
@@ -15,6 +48,7 @@ class RoutineService {
                 frequency: data.frequency,
                 schedule: data.schedule,
                 timezone: data.timezone || 'UTC',
+                reminderBefore: data.reminderBefore || null,
                 nextOccurrenceAt: nextOccurrence,
             },
             include: {
@@ -35,6 +69,24 @@ class RoutineService {
             },
             orderBy: { createdAt: 'desc' },
         });
+        const { scheduleRoutineNotifications } = await Promise.resolve().then(() => __importStar(require('./notificationScheduler')));
+        for (const routine of routines) {
+            if (routine.enabled && routine.reminderBefore) {
+                const reminderCount = await prisma.reminder.count({
+                    where: {
+                        userId: routine.userId,
+                        targetType: 'CUSTOM',
+                        title: {
+                            contains: `Routine Reminder: ${routine.title}`,
+                        },
+                    },
+                });
+                if (reminderCount === 0) {
+                    scheduleRoutineNotifications(routine.id, routine.userId)
+                        .catch(err => logger_1.logger.error(`Failed to reschedule reminders for routine ${routine.id}:`, err));
+                }
+            }
+        }
         return routines;
     }
     async getRoutineById(routineId, userId) {
@@ -86,6 +138,11 @@ class RoutineService {
             updateData.schedule = data.schedule;
         if (data.timezone)
             updateData.timezone = data.timezone;
+        if (data.reminderBefore !== undefined)
+            updateData.reminderBefore = data.reminderBefore || null;
+        if (data.enabled !== undefined) {
+            updateData.enabled = data.enabled;
+        }
         if (data.schedule || data.frequency) {
             const schedule = data.schedule || existing.schedule;
             const frequency = data.frequency || existing.frequency;
@@ -240,6 +297,9 @@ class RoutineService {
         for (const routine of routines) {
             try {
                 await this.resetRoutineTasks(routine.id);
+                const { scheduleRoutineNotifications } = await Promise.resolve().then(() => __importStar(require('./notificationScheduler')));
+                scheduleRoutineNotifications(routine.id, userId)
+                    .catch(err => logger_1.logger.error(`Failed to reschedule notifications for routine ${routine.id} after reset:`, err));
             }
             catch (error) {
                 logger_1.logger.error(`Failed to reset routine ${routine.id}:`, error);
@@ -565,7 +625,7 @@ class RoutineService {
             completedAt: completedAtDate,
         };
     }
-    calculateNextOccurrence(frequency, schedule, timezone) {
+    calculateNextOccurrence(frequency, schedule, _timezone) {
         const now = new Date();
         let next;
         switch (frequency) {

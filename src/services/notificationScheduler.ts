@@ -330,8 +330,13 @@ export async function checkAndNotifyOverdueMilestones(): Promise<void> {
     logger.info(`Found ${overdueMilestones.length} overdue milestones`);
 
     for (const milestone of overdueMilestones) {
-      const userId = milestone.goal.userId;
-      const goalId = milestone.goal.id;
+      const goal = milestone.goal;
+      if (!goal) {
+        logger.warn(`Milestone ${milestone.id} has no associated goal, skipping`);
+        continue;
+      }
+      const userId = goal.userId;
+      const goalId = goal.id;
       
       // Check if we've already sent an overdue notification for this milestone today
       const todayStart = new Date(now);
@@ -365,7 +370,7 @@ export async function checkAndNotifyOverdueMilestones(): Promise<void> {
           targetType: 'GOAL',
           targetId: null,
           title: `Overdue Milestone: ${milestone.title}`,
-          note: `Your milestone "${milestone.title}" for goal "${milestone.goal.title}" is ${daysOverdue} day${daysOverdue !== 1 ? 's' : ''} overdue.`,
+          note: `Your milestone "${milestone.title}" for goal "${goal.title}" is ${daysOverdue} day${daysOverdue !== 1 ? 's' : ''} overdue.`,
           triggerType: 'TIME',
           schedule: {
             at: now.toISOString(),
@@ -1102,7 +1107,7 @@ export async function scheduleRoutineReminderNotification(
 
 export async function scheduleRoutineNotifications(
   routineId: string,
-  userId: string
+  _userId: string
 ): Promise<void> {
   try {
     const prisma = getPrismaClient();

@@ -47,7 +47,7 @@ router.post('/', async (req, res) => {
                 });
             }
         }
-        const serverChanges = await getServerChanges(prisma, userId, lastSyncTimestamp);
+        await getServerChanges(prisma, userId, lastSyncTimestamp);
         const response = {
             operations: processedOperations,
             conflicts,

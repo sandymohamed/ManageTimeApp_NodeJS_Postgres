@@ -15,6 +15,7 @@ export interface CreateRoutineData {
   schedule: RoutineSchedule;
   timezone?: string;
   reminderBefore?: string; // e.g., "2h", "1d", "1w"
+  enabled?: boolean;
 }
 
 export interface CreateRoutineTaskData {
@@ -846,7 +847,7 @@ export class RoutineService {
   private calculateNextOccurrence(
     frequency: string,
     schedule: RoutineSchedule,
-    timezone: string
+    _timezone: string
   ): Date {
     const now = new Date();
     let next: Date;

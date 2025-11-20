@@ -17,7 +17,7 @@ export const authenticateToken = async (
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JWTPayload;
-    console.log('decoded in authenticateToken', decoded);
+    // Decoded token is used below to fetch user
     // Get user from database
     const prisma = getPrismaClient();
     const user = await prisma.user.findUnique({

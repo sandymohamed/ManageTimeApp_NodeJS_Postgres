@@ -61,7 +61,8 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     }
 
     // Get server changes since last sync
-    const serverChanges = await getServerChanges(prisma, userId, lastSyncTimestamp);
+    // TODO: Include serverChanges in response when needed
+    await getServerChanges(prisma, userId, lastSyncTimestamp);
 
     const response: SyncResponse = {
       operations: processedOperations,

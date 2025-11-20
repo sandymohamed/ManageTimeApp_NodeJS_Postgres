@@ -9,6 +9,7 @@ const database_1 = require("../utils/database");
 const auth_1 = require("../middleware/auth");
 const types_1 = require("../types");
 const logger_1 = require("../utils/logger");
+const notificationScheduler_1 = require("../services/notificationScheduler");
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticateToken);
 const createAlarmSchema = joi_1.default.object({
@@ -117,6 +118,20 @@ router.post('/', async (req, res) => {
             },
         });
         logger_1.logger.info('Alarm created successfully', { alarmId: alarm.id, userId });
+        try {
+            await (0, notificationScheduler_1.scheduleAlarmPushNotification)({
+                id: alarm.id,
+                userId: alarm.userId,
+                title: alarm.title,
+                time: alarm.time,
+                timezone: alarm.timezone,
+                recurrenceRule: alarm.recurrenceRule,
+                enabled: alarm.enabled,
+            });
+        }
+        catch (scheduleError) {
+            logger_1.logger.error('Failed to schedule alarm push notification', { alarmId: alarm.id, error: scheduleError });
+        }
         res.status(201).json({
             success: true,
             data: alarm,
@@ -151,6 +166,20 @@ router.put('/:id', async (req, res) => {
             },
         });
         logger_1.logger.info('Alarm updated successfully', { alarmId: id, userId });
+        try {
+            await (0, notificationScheduler_1.scheduleAlarmPushNotification)({
+                id: updatedAlarm.id,
+                userId: updatedAlarm.userId,
+                title: updatedAlarm.title,
+                time: updatedAlarm.time,
+                timezone: updatedAlarm.timezone,
+                recurrenceRule: updatedAlarm.recurrenceRule,
+                enabled: updatedAlarm.enabled,
+            });
+        }
+        catch (scheduleError) {
+            logger_1.logger.error('Failed to reschedule alarm push notification', { alarmId: id, error: scheduleError });
+        }
         res.json({
             success: true,
             data: updatedAlarm,
@@ -171,20 +200,40 @@ router.delete('/:id', async (req, res) => {
             where: { id, userId },
         });
         if (!alarm) {
-            throw new types_1.NotFoundError('Alarm');
+            logger_1.logger.info('Alarm not found or already deleted', { alarmId: id, userId });
+            return res.json({
+                success: true,
+                message: 'Alarm deleted successfully',
+            });
         }
         await prisma.alarm.delete({
             where: { id },
         });
+        try {
+            await (0, notificationScheduler_1.cancelAlarmPushNotifications)(id, userId);
+        }
+        catch (notifError) {
+            logger_1.logger.warn('Failed to cancel scheduled alarm notifications', { alarmId: id, error: notifError });
+        }
         logger_1.logger.info('Alarm deleted successfully', { alarmId: id, userId });
-        res.json({
+        return res.json({
             success: true,
             message: 'Alarm deleted successfully',
         });
     }
     catch (error) {
+        if (error.code === 'P2025') {
+            logger_1.logger.info('Alarm already deleted', { alarmId: req.params.id, userId: req.user.id });
+            return res.json({
+                success: true,
+                message: 'Alarm deleted successfully',
+            });
+        }
         logger_1.logger.error('Failed to delete alarm:', error);
-        throw error;
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to delete alarm',
+        });
     }
 });
 router.post('/:id/snooze', async (req, res) => {
@@ -219,17 +268,31 @@ router.post('/:id/dismiss', async (req, res) => {
             where: { id, userId },
         });
         if (!alarm) {
-            throw new types_1.NotFoundError('Alarm');
+            logger_1.logger.info('Alarm not found or already deleted for dismiss', { alarmId: id, userId });
+            return res.json({
+                success: true,
+                message: 'Alarm dismissed successfully',
+            });
         }
         logger_1.logger.info('Alarm dismissed', { alarmId: id, userId });
-        res.json({
+        return res.json({
             success: true,
             message: 'Alarm dismissed successfully',
         });
     }
     catch (error) {
+        if (error.code === 'P2025') {
+            logger_1.logger.info('Alarm already deleted during dismiss', { alarmId: req.params.id, userId: req.user.id });
+            return res.json({
+                success: true,
+                message: 'Alarm dismissed successfully',
+            });
+        }
         logger_1.logger.error('Failed to dismiss alarm:', error);
-        throw error;
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to dismiss alarm',
+        });
     }
 });
 exports.default = router;

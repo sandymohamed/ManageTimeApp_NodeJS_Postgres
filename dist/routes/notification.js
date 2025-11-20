@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const notificationService_1 = require("../services/notificationService");
 const auth_1 = require("../middleware/auth");
+const logger_1 = require("../utils/logger");
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticateToken);
 router.get('/', async (req, res) => {
@@ -15,7 +16,7 @@ router.get('/', async (req, res) => {
         });
     }
     catch (error) {
-        console.error('Get notifications error:', error);
+        logger_1.logger.error('Get notifications error:', error);
         res.status(500).json({
             success: false,
             message: 'Failed to get notifications',
@@ -25,9 +26,7 @@ router.get('/', async (req, res) => {
 });
 router.get('/unread-count', async (req, res) => {
     try {
-        console.log('req.user', req.user);
         const userId = req.user.id;
-        console.log('userId', userId);
         const count = await notificationService_1.notificationService.getUnreadNotificationCount(userId);
         res.json({
             success: true,
@@ -35,7 +34,7 @@ router.get('/unread-count', async (req, res) => {
         });
     }
     catch (error) {
-        console.error('Get unread count error:', error);
+        logger_1.logger.error('Get unread count error:', error);
         res.status(500).json({
             success: false,
             message: 'Failed to get unread count',
@@ -53,7 +52,7 @@ router.put('/:id/read', async (req, res) => {
         });
     }
     catch (error) {
-        console.error('Mark notification as read error:', error);
+        logger_1.logger.error('Mark notification as read error:', error);
         res.status(500).json({
             success: false,
             message: 'Failed to mark notification as read',
@@ -71,7 +70,7 @@ router.delete('/:id', async (req, res) => {
         });
     }
     catch (error) {
-        console.error('Delete notification error:', error);
+        logger_1.logger.error('Delete notification error:', error);
         res.status(500).json({
             success: false,
             message: 'Failed to delete notification',

@@ -46,7 +46,7 @@ const router = (0, express_1.Router)();
 router.use(auth_1.authenticateToken);
 const createTaskSchema = joi_1.default.object({
     title: joi_1.default.string().min(1).max(255).required(),
-    description: joi_1.default.string().max(1000).optional(),
+    description: joi_1.default.string().max(1000).allow('', null).optional().default(''),
     assigneeId: joi_1.default.string().uuid().allow(null).optional(),
     projectId: joi_1.default.string().uuid().allow(null).optional(),
     goalId: joi_1.default.string().uuid().allow(null).optional(),
@@ -60,7 +60,7 @@ const createTaskSchema = joi_1.default.object({
 });
 const updateTaskSchema = joi_1.default.object({
     title: joi_1.default.string().min(1).max(255).optional(),
-    description: joi_1.default.string().max(1000).optional(),
+    description: joi_1.default.string().max(1000).allow('', null).optional(),
     assigneeId: joi_1.default.string().uuid().allow(null).optional(),
     projectId: joi_1.default.string().uuid().allow(null).optional(),
     goalId: joi_1.default.string().uuid().allow(null).optional(),
@@ -117,32 +117,29 @@ router.get('/', async (req, res) => {
         if (assigneeId) {
             where.assigneeId = assigneeId;
         }
-        const [tasks, total] = await Promise.all([
-            prisma.task.findMany({
-                where,
-                include: {
-                    creator: {
-                        select: { id: true, name: true, email: true },
-                    },
-                    assignee: {
-                        select: { id: true, name: true, email: true },
-                    },
-                    project: {
-                        select: { id: true, title: true },
-                    },
-                    goal: {
-                        select: { id: true, title: true },
-                    },
-                    milestone: {
-                        select: { id: true, title: true },
-                    },
+        const tasks = await prisma.task.findMany({
+            where,
+            include: {
+                creator: {
+                    select: { id: true, name: true, email: true },
                 },
-                orderBy: { order: 'asc' },
-                skip: (Number(page) - 1) * Number(limit),
-                take: Number(limit),
-            }),
-            prisma.task.count({ where }),
-        ]);
+                assignee: {
+                    select: { id: true, name: true, email: true },
+                },
+                project: {
+                    select: { id: true, title: true },
+                },
+                goal: {
+                    select: { id: true, title: true },
+                },
+                milestone: {
+                    select: { id: true, title: true },
+                },
+            },
+            orderBy: { order: 'asc' },
+            skip: (Number(page) - 1) * Number(limit),
+            take: Number(limit),
+        });
         const { routineService } = await Promise.resolve().then(() => __importStar(require('../services/routineService')));
         const routineTasks = await routineService.getRoutineTasksAsTasks(userId);
         let allTasks = [...tasks, ...routineTasks];
@@ -289,6 +286,24 @@ router.post('/', async (req, res) => {
                 },
             },
         });
+        const notificationScheduler = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
+        if (task.dueDate) {
+            const taskUserId = task.assigneeId || task.creatorId;
+            const dueTime = value.dueTime || task.dueTime || null;
+            logger_1.logger.info('Scheduling task notifications', {
+                taskId: task.id,
+                userId: taskUserId,
+                dueDate: task.dueDate,
+                dueTime
+            });
+            notificationScheduler.scheduleTaskDueDateNotifications(task.id, taskUserId, task.dueDate, task.title, dueTime)
+                .catch(err => logger_1.logger.error('Failed to schedule task notifications:', err));
+        }
+        notificationScheduler.sendTaskCreatedNotification(task.id, userId, task.title, { projectTitle: task.project?.title || undefined }).catch(err => logger_1.logger.error('Failed to send task created notification:', err));
+        if (task.assigneeId && task.assigneeId !== userId) {
+            const creator = task.creator;
+            notificationScheduler.sendTaskAssignmentNotification(task.id, task.assigneeId, task.title, creator?.name || creator?.email).catch(err => logger_1.logger.error('Failed to send assignment notification:', err));
+        }
         res.status(201).json({
             success: true,
             data: task,
@@ -310,7 +325,13 @@ router.put('/:id', async (req, res) => {
         const userId = req.user.id;
         const prisma = (0, database_1.getPrismaClient)();
         if (id.startsWith('routine_')) {
-            const routineTaskId = id.replace('routine_', '').split('_day_')[0];
+            let routineTaskId = id.replace('routine_', '');
+            if (routineTaskId.includes('_day_')) {
+                routineTaskId = routineTaskId.split('_day_')[0];
+            }
+            else if (routineTaskId.match(/_\d{4}-\d{2}-\d{2}$/)) {
+                routineTaskId = routineTaskId.replace(/_\d{4}-\d{2}-\d{2}$/, '');
+            }
             const { routineService } = await Promise.resolve().then(() => __importStar(require('../services/routineService')));
             if (value.status === 'DONE') {
                 await routineService.toggleTaskCompletion(routineTaskId, userId, true);
@@ -319,11 +340,20 @@ router.put('/:id', async (req, res) => {
                 await routineService.toggleTaskCompletion(routineTaskId, userId, false);
             }
             const routineTasks = await routineService.getRoutineTasksAsTasks(userId);
-            const updatedTask = routineTasks.find(t => t.id === id);
+            let updatedTask = routineTasks.find(t => t.id === id);
             if (!updatedTask) {
-                throw new types_1.NotFoundError('Task');
+                updatedTask = routineTasks.find(t => t.metadata?.routineTaskId === routineTaskId);
+                if (updatedTask) {
+                    updatedTask = {
+                        ...updatedTask,
+                        id: id,
+                    };
+                }
             }
-            logger_1.logger.info('Routine task updated successfully', { taskId: id, userId });
+            if (!updatedTask) {
+                throw new types_1.NotFoundError('Task not found');
+            }
+            logger_1.logger.info('Routine task updated successfully', { taskId: id, routineTaskId, userId });
             return res.json({
                 success: true,
                 data: updatedTask,
@@ -364,6 +394,26 @@ router.put('/:id', async (req, res) => {
                 },
             },
         });
+        if (value.dueDate !== undefined || value.dueTime !== undefined) {
+            const { scheduleTaskDueDateNotifications } = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
+            const taskUserId = task.assigneeId || task.creatorId;
+            const dueTime = value.dueTime !== undefined ? value.dueTime : (task.dueTime || null);
+            logger_1.logger.info('Rescheduling task notifications', {
+                taskId: task.id,
+                userId: taskUserId,
+                dueDate: task.dueDate,
+                dueTime
+            });
+            if (task.dueDate) {
+                scheduleTaskDueDateNotifications(task.id, taskUserId, task.dueDate, task.title, dueTime)
+                    .catch(err => logger_1.logger.error('Failed to reschedule task notifications:', err));
+            }
+        }
+        if (value.assigneeId && value.assigneeId !== existingTask.assigneeId && value.assigneeId !== userId && task.assigneeId) {
+            const { sendTaskAssignmentNotification } = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
+            const creator = task.creator;
+            sendTaskAssignmentNotification(task.id, task.assigneeId, task.title, creator?.name || creator?.email).catch(err => logger_1.logger.error('Failed to send assignment notification:', err));
+        }
         logger_1.logger.info('Task updated successfully', { taskId: id, userId });
         return res.json({
             success: true,
@@ -446,6 +496,11 @@ router.post('/:id/assign', async (req, res) => {
                 },
             },
         });
+        if (assigneeId && assigneeId !== userId) {
+            const { sendTaskAssignmentNotification } = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
+            const creator = updatedTask.creator;
+            sendTaskAssignmentNotification(updatedTask.id, assigneeId, updatedTask.title, creator?.name || creator?.email).catch(err => logger_1.logger.error('Failed to send assignment notification:', err));
+        }
         logger_1.logger.info('Task assigned successfully', { taskId: id, assigneeId, userId });
         res.json({
             success: true,

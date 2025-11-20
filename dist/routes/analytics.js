@@ -49,7 +49,7 @@ router.get('/summary', async (req, res) => {
             }
         }
         const dateTo = endDate ? new Date(endDate) : now;
-        const [tasksCompleted, tasksCreated, goalsCompleted, goalsCreated, totalTasks, totalGoals,] = await Promise.all([
+        const [tasksCompleted, tasksCreated, goalsCompleted, goalsCreated, totalTasks,] = await Promise.all([
             prisma.task.count({
                 where: {
                     OR: [
@@ -92,9 +92,6 @@ router.get('/summary', async (req, res) => {
                         { project: { members: { some: { userId } } } },
                     ],
                 },
-            }),
-            prisma.goal.count({
-                where: { userId },
             }),
         ]);
         const productivityScore = totalTasks > 0 ? Math.round((tasksCompleted / totalTasks) * 100) : 0;

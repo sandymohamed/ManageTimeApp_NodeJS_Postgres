@@ -291,7 +291,7 @@ router.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
     });
 
     // Reschedule notifications if target date changed
-    if (value.targetDate !== undefined) {
+    if (value.targetDate !== undefined && updatedGoal.targetDate) {
       const { scheduleGoalTargetDateNotifications } = await import('../services/notificationScheduler');
       scheduleGoalTargetDateNotifications(updatedGoal.id, userId, updatedGoal.targetDate, updatedGoal.title)
         .catch(err => logger.error('Failed to reschedule goal notifications:', err));
@@ -344,7 +344,7 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
 router.post('/:id/milestones/:milestoneId/complete', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id, milestoneId } = req.params;
-    const { status, } = req.body;
+    // No body parameters needed for completion
     const userId = req.user!.id;
     const prisma = getPrismaClient();
     const goal = await prisma.goal.findFirst({
@@ -406,7 +406,7 @@ router.post('/:id/milestones/:milestoneId/complete', async (req: AuthenticatedRe
 router.post('/:id/milestones', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { title, description, dueDate, weight } = req.body;
+    const { title, dueDate, weight } = req.body;
     const userId = req.user!.id;
     const prisma = getPrismaClient();
 

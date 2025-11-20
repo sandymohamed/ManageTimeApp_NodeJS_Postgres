@@ -9,6 +9,7 @@ const bcrypt_1 = __importDefault(require("bcrypt"));
 const database_1 = require("../utils/database");
 const auth_1 = require("../middleware/auth");
 const types_1 = require("../types");
+const logger_1 = require("../utils/logger");
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticateToken);
 const updateProfileSchema = joi_1.default.object({
@@ -32,7 +33,7 @@ const notificationSettingsSchema = joi_1.default.object({
     weeklyDigest: joi_1.default.boolean().optional(),
     monthlyReport: joi_1.default.boolean().optional(),
     marketingEmails: joi_1.default.boolean().optional(),
-});
+}).unknown(false);
 const privacySettingsSchema = joi_1.default.object({
     shareAnalytics: joi_1.default.boolean().optional(),
     shareCrashReports: joi_1.default.boolean().optional(),
@@ -40,6 +41,10 @@ const privacySettingsSchema = joi_1.default.object({
     allowProjectInvites: joi_1.default.boolean().optional(),
     showActivityStatus: joi_1.default.boolean().optional(),
     allowDataCollection: joi_1.default.boolean().optional(),
+});
+const pushTokenSchema = joi_1.default.object({
+    token: joi_1.default.string().required(),
+    platform: joi_1.default.string().valid('android', 'ios').required(),
 });
 router.get('/', async (req, res) => {
     try {
@@ -188,6 +193,81 @@ router.post('/change-password', async (req, res) => {
         return res.json({
             success: true,
             message: 'Password changed successfully',
+        });
+    }
+    catch (error) {
+        throw error;
+    }
+});
+router.post('/push-token', async (req, res) => {
+    try {
+        const { error, value } = pushTokenSchema.validate(req.body);
+        if (error) {
+            throw new types_1.ValidationError(error.details[0].message);
+        }
+        const { token, platform } = value;
+        const prisma = (0, database_1.getPrismaClient)();
+        const userId = req.user.id;
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { settings: true },
+        });
+        const currentSettings = user?.settings || {};
+        const pushTokens = currentSettings.pushTokens || [];
+        const filteredTokens = pushTokens.filter((t) => t.token !== token && t.platform !== platform);
+        const newToken = {
+            token,
+            platform,
+            registeredAt: new Date().toISOString(),
+        };
+        const updatedSettings = {
+            ...currentSettings,
+            pushTokens: [...filteredTokens, newToken],
+        };
+        await prisma.user.update({
+            where: { id: userId },
+            data: { settings: updatedSettings },
+        });
+        logger_1.logger.info(`Push token registered for user ${userId}`, { platform, tokenLength: token.length });
+        res.json({
+            success: true,
+            data: newToken,
+            message: 'Push token registered successfully',
+        });
+    }
+    catch (error) {
+        throw error;
+    }
+});
+router.delete('/push-token', async (req, res) => {
+    try {
+        const deletePushTokenSchema = joi_1.default.object({
+            token: joi_1.default.string().required(),
+        });
+        const { error, value } = deletePushTokenSchema.validate(req.body);
+        if (error) {
+            throw new types_1.ValidationError(error.details[0].message);
+        }
+        const { token } = value;
+        const prisma = (0, database_1.getPrismaClient)();
+        const userId = req.user.id;
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { settings: true },
+        });
+        const currentSettings = user?.settings || {};
+        const pushTokens = (currentSettings.pushTokens || []).filter((t) => t.token !== token);
+        const updatedSettings = {
+            ...currentSettings,
+            pushTokens,
+        };
+        await prisma.user.update({
+            where: { id: userId },
+            data: { settings: updatedSettings },
+        });
+        res.json({
+            success: true,
+            message: 'Push token removed successfully',
         });
     }
     catch (error) {

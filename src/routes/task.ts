@@ -107,32 +107,29 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
       where.assigneeId = assigneeId;
     }
 
-    const [tasks, total] = await Promise.all([
-      prisma.task.findMany({
-        where,
-        include: {
-          creator: {
-            select: { id: true, name: true, email: true },
-          },
-          assignee: {
-            select: { id: true, name: true, email: true },
-          },
-          project: {
-            select: { id: true, title: true },
-          },
-          goal: {
-            select: { id: true, title: true },
-          },
-          milestone: {
-            select: { id: true, title: true },
-          },
+    const tasks = await prisma.task.findMany({
+      where,
+      include: {
+        creator: {
+          select: { id: true, name: true, email: true },
         },
-        orderBy: { order: 'asc' },
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
-      }),
-      prisma.task.count({ where }),
-    ]);
+        assignee: {
+          select: { id: true, name: true, email: true },
+        },
+        project: {
+          select: { id: true, title: true },
+        },
+        goal: {
+          select: { id: true, title: true },
+        },
+        milestone: {
+          select: { id: true, title: true },
+        },
+      },
+      orderBy: { order: 'asc' },
+      skip: (Number(page) - 1) * Number(limit),
+      take: Number(limit),
+    });
 
     // Get routine tasks as tasks
     const { routineService } = await import('../services/routineService');
@@ -480,12 +477,14 @@ router.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
         dueDate: task.dueDate, 
         dueTime 
       });
-      scheduleTaskDueDateNotifications(task.id, taskUserId, task.dueDate, task.title, dueTime)
-        .catch(err => logger.error('Failed to reschedule task notifications:', err));
+      if (task.dueDate) {
+        scheduleTaskDueDateNotifications(task.id, taskUserId, task.dueDate, task.title, dueTime)
+          .catch(err => logger.error('Failed to reschedule task notifications:', err));
+      }
     }
 
     // Send assignment notification if task was just assigned
-    if (value.assigneeId && value.assigneeId !== existingTask.assigneeId && value.assigneeId !== userId) {
+    if (value.assigneeId && value.assigneeId !== existingTask.assigneeId && value.assigneeId !== userId && task.assigneeId) {
       const { sendTaskAssignmentNotification } = await import('../services/notificationScheduler');
       const creator = task.creator;
       sendTaskAssignmentNotification(

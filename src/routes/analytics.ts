@@ -62,7 +62,6 @@ router.get('/summary', async (req: AuthenticatedRequest, res: Response) => {
       goalsCompleted,
       goalsCreated,
       totalTasks,
-      totalGoals,
     ] = await Promise.all([
       prisma.task.count({
         where: {
@@ -107,9 +106,6 @@ router.get('/summary', async (req: AuthenticatedRequest, res: Response) => {
             { project: { members: { some: { userId } } } },
           ],
         },
-      }),
-      prisma.goal.count({
-        where: { userId },
       }),
     ]);
 

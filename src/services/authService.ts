@@ -201,10 +201,9 @@ export class AuthService {
 
     // Verify JWT signature (but allow expired JWTs if they're valid in database)
     // This handles cases where JWT might be expired but database says it's still valid
-    let decoded: JWTPayload;
     try {
-      // Try to verify without checking expiration first
-      decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!, {
+      // Try to verify without checking expiration first (verification throws if invalid)
+      jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!, {
         ignoreExpiration: true, // Ignore JWT expiration, use database expiration instead
       }) as JWTPayload;
     } catch (error: any) {

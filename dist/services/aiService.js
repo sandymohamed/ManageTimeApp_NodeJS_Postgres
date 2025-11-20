@@ -11,6 +11,7 @@ class AIService {
         this.openai = new openai_1.default({
             apiKey: process.env.OPENAI_API_KEY,
         });
+        this.model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
     }
     static getInstance() {
         if (!AIService.instance) {
@@ -28,7 +29,7 @@ class AIService {
                 tone,
             });
             const response = await this.openai.chat.completions.create({
-                model: 'gpt-4',
+                model: this.model,
                 messages: [
                     {
                         role: 'system',
@@ -50,6 +51,10 @@ class AIService {
         }
         catch (error) {
             logger_1.logger.error('Failed to generate AI plan:', error);
+            if (error?.code === 'model_not_found' || error?.status === 404) {
+                const fallbackMessage = `OpenAI model "${this.model}" is unavailable. Set OPENAI_MODEL to a valid model (e.g. "gpt-4o-mini") or verify your API access.`;
+                throw new Error(fallbackMessage);
+            }
             throw error;
         }
     }
@@ -166,7 +171,7 @@ Important rules:
             description: task.description || '',
         }));
     }
-    async generateSimplePlan(goalTitle) {
+    async generateSimplePlan(_goalTitle) {
         return {
             milestones: [
                 {

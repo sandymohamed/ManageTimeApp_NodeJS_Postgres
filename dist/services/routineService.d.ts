@@ -10,6 +10,8 @@ export interface CreateRoutineData {
     frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
     schedule: RoutineSchedule;
     timezone?: string;
+    reminderBefore?: string;
+    enabled?: boolean;
 }
 export interface CreateRoutineTaskData {
     title: string;
@@ -23,12 +25,12 @@ export declare class RoutineService {
             id: string;
             createdAt: Date;
             updatedAt: Date;
-            completed: boolean;
             title: string;
             description: string | null;
             completedAt: Date | null;
             order: number;
             routineId: string;
+            completed: boolean;
             reminderTime: string | null;
         }[];
     } & {
@@ -36,12 +38,13 @@ export declare class RoutineService {
         timezone: string;
         createdAt: Date;
         updatedAt: Date;
-        userId: string;
         title: string;
         description: string | null;
+        userId: string;
         enabled: boolean;
         schedule: Prisma.JsonValue;
         frequency: import(".prisma/client").$Enums.RoutineFrequency;
+        reminderBefore: string | null;
         lastResetAt: Date | null;
         nextOccurrenceAt: Date | null;
     }>;
@@ -50,12 +53,12 @@ export declare class RoutineService {
             id: string;
             createdAt: Date;
             updatedAt: Date;
-            completed: boolean;
             title: string;
             description: string | null;
             completedAt: Date | null;
             order: number;
             routineId: string;
+            completed: boolean;
             reminderTime: string | null;
         }[];
     } & {
@@ -63,12 +66,13 @@ export declare class RoutineService {
         timezone: string;
         createdAt: Date;
         updatedAt: Date;
-        userId: string;
         title: string;
         description: string | null;
+        userId: string;
         enabled: boolean;
         schedule: Prisma.JsonValue;
         frequency: import(".prisma/client").$Enums.RoutineFrequency;
+        reminderBefore: string | null;
         lastResetAt: Date | null;
         nextOccurrenceAt: Date | null;
     })[]>;
@@ -77,12 +81,12 @@ export declare class RoutineService {
             id: string;
             createdAt: Date;
             updatedAt: Date;
-            completed: boolean;
             title: string;
             description: string | null;
             completedAt: Date | null;
             order: number;
             routineId: string;
+            completed: boolean;
             reminderTime: string | null;
         }[];
     } & {
@@ -90,12 +94,13 @@ export declare class RoutineService {
         timezone: string;
         createdAt: Date;
         updatedAt: Date;
-        userId: string;
         title: string;
         description: string | null;
+        userId: string;
         enabled: boolean;
         schedule: Prisma.JsonValue;
         frequency: import(".prisma/client").$Enums.RoutineFrequency;
+        reminderBefore: string | null;
         lastResetAt: Date | null;
         nextOccurrenceAt: Date | null;
     }) | null>;
@@ -104,12 +109,12 @@ export declare class RoutineService {
             id: string;
             createdAt: Date;
             updatedAt: Date;
-            completed: boolean;
             title: string;
             description: string | null;
             completedAt: Date | null;
             order: number;
             routineId: string;
+            completed: boolean;
             reminderTime: string | null;
         }[];
     } & {
@@ -117,12 +122,13 @@ export declare class RoutineService {
         timezone: string;
         createdAt: Date;
         updatedAt: Date;
-        userId: string;
         title: string;
         description: string | null;
+        userId: string;
         enabled: boolean;
         schedule: Prisma.JsonValue;
         frequency: import(".prisma/client").$Enums.RoutineFrequency;
+        reminderBefore: string | null;
         lastResetAt: Date | null;
         nextOccurrenceAt: Date | null;
     }>;
@@ -133,24 +139,24 @@ export declare class RoutineService {
         id: string;
         createdAt: Date;
         updatedAt: Date;
-        completed: boolean;
         title: string;
         description: string | null;
         completedAt: Date | null;
         order: number;
         routineId: string;
+        completed: boolean;
         reminderTime: string | null;
     }>;
     updateRoutineTask(taskId: string, userId: string, data: Partial<CreateRoutineTaskData>): Promise<{
         id: string;
         createdAt: Date;
         updatedAt: Date;
-        completed: boolean;
         title: string;
         description: string | null;
         completedAt: Date | null;
         order: number;
         routineId: string;
+        completed: boolean;
         reminderTime: string | null;
     }>;
     deleteRoutineTask(taskId: string, userId: string): Promise<{
@@ -160,12 +166,12 @@ export declare class RoutineService {
         id: string;
         createdAt: Date;
         updatedAt: Date;
-        completed: boolean;
         title: string;
         description: string | null;
         completedAt: Date | null;
         order: number;
         routineId: string;
+        completed: boolean;
         reminderTime: string | null;
     }>;
     resetRoutineTasks(routineId: string): Promise<{
