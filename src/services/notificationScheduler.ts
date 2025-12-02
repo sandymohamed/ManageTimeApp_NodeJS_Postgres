@@ -551,9 +551,45 @@ export async function scheduleAlarmPushNotification(alarm: AlarmLike): Promise<v
     return;
   }
 
-  // Add a small buffer (5 seconds) to avoid scheduling jobs that would run immediately
-  if (alarmTime.getTime() <= now.getTime() + 5000) {
-    logger.warn(`Alarm ${alarm.id} time is in the past or too soon (${alarmTime.toISOString()}), skipping scheduling`);
+  // For recurring alarms, calculate the next valid occurrence if the current time is in the past
+  let scheduledAlarmTime = alarmTime;
+  if (alarm.recurrenceRule && alarmTime.getTime() <= now.getTime()) {
+    // Calculate next occurrence based on recurrence rule
+    if (alarm.recurrenceRule.startsWith('FREQ=DAILY')) {
+      // For daily alarms, add 1 day if time has passed
+      scheduledAlarmTime = new Date(alarmTime);
+      while (scheduledAlarmTime.getTime() <= now.getTime()) {
+        scheduledAlarmTime.setDate(scheduledAlarmTime.getDate() + 1);
+      }
+      logger.info(`Alarm ${alarm.id} time is in the past, scheduling for next occurrence: ${scheduledAlarmTime.toISOString()}`);
+    } else if (alarm.recurrenceRule.startsWith('FREQ=WEEKLY')) {
+      // For weekly alarms, add 1 week if time has passed
+      scheduledAlarmTime = new Date(alarmTime);
+      while (scheduledAlarmTime.getTime() <= now.getTime()) {
+        scheduledAlarmTime.setDate(scheduledAlarmTime.getDate() + 7);
+      }
+      logger.info(`Alarm ${alarm.id} time is in the past, scheduling for next occurrence: ${scheduledAlarmTime.toISOString()}`);
+    } else if (alarm.recurrenceRule.startsWith('FREQ=MONTHLY')) {
+      // For monthly alarms, add 1 month if time has passed
+      scheduledAlarmTime = new Date(alarmTime);
+      while (scheduledAlarmTime.getTime() <= now.getTime()) {
+        scheduledAlarmTime.setMonth(scheduledAlarmTime.getMonth() + 1);
+      }
+      logger.info(`Alarm ${alarm.id} time is in the past, scheduling for next occurrence: ${scheduledAlarmTime.toISOString()}`);
+    } else {
+      // For other recurrence rules or non-recurring alarms, only skip if more than 1 second in the past
+      if (alarmTime.getTime() < now.getTime() - 1000) {
+        logger.warn(`Alarm ${alarm.id} time is too far in the past (${alarmTime.toISOString()}), skipping scheduling`);
+        await cancelAlarmPushNotifications(alarm.id, alarm.userId);
+        return;
+      }
+    }
+  }
+
+  // Only skip if alarm is more than 1 second in the past (allow very soon alarms)
+  // Changed from 5 seconds buffer to 1 second to allow alarms even if they're very soon
+  if (scheduledAlarmTime.getTime() < now.getTime() - 1000) {
+    logger.warn(`Alarm ${alarm.id} time is too far in the past (${scheduledAlarmTime.toISOString()}), skipping scheduling`);
     await cancelAlarmPushNotifications(alarm.id, alarm.userId);
     return;
   }
@@ -577,7 +613,7 @@ export async function scheduleAlarmPushNotification(alarm: AlarmLike): Promise<v
           alarmId: alarm.id,
           notificationType: ALARM_NOTIFICATION_TYPE,
         },
-        scheduledFor: alarmTime,
+        scheduledFor: scheduledAlarmTime,
         status: 'PENDING',
       },
     });
@@ -585,7 +621,7 @@ export async function scheduleAlarmPushNotification(alarm: AlarmLike): Promise<v
     await scheduleNotification(
       notification.id,
       alarm.userId,
-      alarmTime,
+      scheduledAlarmTime,
       ALARM_NOTIFICATION_TYPE,
       {
         title,
@@ -595,7 +631,7 @@ export async function scheduleAlarmPushNotification(alarm: AlarmLike): Promise<v
       }
     );
 
-    logger.info(`Scheduled push notification for alarm ${alarm.id} at ${alarmTime.toISOString()}`);
+    logger.info(`Scheduled push notification for alarm ${alarm.id} at ${scheduledAlarmTime.toISOString()}`);
   } catch (error) {
     logger.error(`Failed to schedule push notification for alarm ${alarm.id}:`, error);
     // Clean up notification record if scheduling failed
@@ -725,7 +761,8 @@ export async function scheduleRoutineTaskNotifications(
   timezone: string,
   taskId: string,
   taskTitle: string,
-  reminderTime?: string | null
+  reminderTime?: string | null,
+  reminderBefore?: string | null
 ): Promise<void> {
   try {
     const prisma = getPrismaClient();
@@ -856,6 +893,13 @@ export async function scheduleRoutineTaskNotifications(
       taskId,
     });
 
+    // Store reminder schedule for later use (needed for alarm creation)
+    const fullReminderSchedule = {
+      ...reminderSchedule,
+      routineId: routineId, // Store IDs in schedule for reference
+      taskId: taskId,
+    };
+
     // Create reminder record
     const reminder = await prisma.reminder.create({
       data: {
@@ -865,11 +909,7 @@ export async function scheduleRoutineTaskNotifications(
         title: `Routine: ${routineTitle}`,
         note: `Time to complete "${taskTitle}"`,
         triggerType: 'TIME',
-          schedule: {
-            ...reminderSchedule,
-            routineId: routineId, // Store IDs in schedule for reference
-            taskId: taskId,
-          } as any,
+        schedule: fullReminderSchedule as any,
       },
     });
 
@@ -900,6 +940,78 @@ export async function scheduleRoutineTaskNotifications(
         delay,
         delayMinutes: Math.round(delay / 60000),
       });
+
+      // Always create an alarm for the routine task
+      // Priority: reminderBefore > reminderTime > routine schedule time
+      try {
+        let alarmTimeForReminder: string;
+        
+        // If reminderBefore is set, calculate alarm time as routine time - reminderBefore
+        if (reminderBefore) {
+          // Parse reminderBefore (e.g., "1h", "2d", "1w")
+          const match = reminderBefore.match(/^(\d+)([hdw])$/);
+          if (match) {
+            const [, valueStr, unit] = match;
+            const value = parseInt(valueStr, 10);
+            const [routineHours, routineMinutes] = (schedule.time || '00:00').split(':').map(Number);
+            
+            let alarmHours = routineHours;
+            let alarmMinutes = routineMinutes;
+            
+            if (unit === 'h') {
+              // Hours before - subtract hours from routine time
+              alarmHours = routineHours - value;
+              if (alarmHours < 0) {
+                alarmHours += 24; // Wrap to previous day
+              }
+            } else if (unit === 'd') {
+              // Days before - keep same time, will be handled by date calculation in alarm creation
+              // For now, use routine time but the date will be adjusted
+              alarmHours = routineHours;
+              alarmMinutes = routineMinutes;
+            } else if (unit === 'w') {
+              // Weeks before - keep same time, will be handled by date calculation
+              alarmHours = routineHours;
+              alarmMinutes = routineMinutes;
+            }
+            
+            // Format as HH:mm
+            alarmTimeForReminder = `${String(alarmHours).padStart(2, '0')}:${String(alarmMinutes).padStart(2, '0')}`;
+            
+            logger.info(`Calculated alarm time from reminderBefore: routine ${schedule.time}, reminderBefore ${reminderBefore}, alarm time ${alarmTimeForReminder}`);
+          } else {
+            // Invalid reminderBefore format, fall back to reminderTime or routine time
+            alarmTimeForReminder = reminderTime || schedule.time || '00:00';
+          }
+        } else {
+          // No reminderBefore, use reminderTime if provided, otherwise use routine schedule time
+          alarmTimeForReminder = reminderTime || schedule.time || '00:00';
+        }
+        
+        await createAlarmForRoutineReminder(
+          routineId,
+          taskId,
+          userId,
+          routineTitle,
+          taskTitle,
+          nextOccurrence,
+          frequency,
+          schedule,
+          timezone,
+          alarmTimeForReminder,
+          fullReminderSchedule,
+          reminderBefore // Pass reminderBefore for date adjustments if needed
+        );
+      } catch (alarmError: any) {
+        logger.error(`Failed to create alarm for routine task reminder ${taskId}:`, {
+          error: alarmError,
+          taskId,
+          routineId,
+          reminderTime: reminderTime || 'routine time',
+          reminderBefore,
+        });
+        // Don't throw - alarm creation failure shouldn't break reminder scheduling
+      }
     } catch (scheduleError: any) {
       logger.error(`Failed to schedule reminder job for routine task ${taskId}:`, {
         error: scheduleError,
@@ -976,6 +1088,16 @@ export async function cancelRoutineNotifications(
     if (!routine) {
       return;
     }
+
+    // Cancel alarms for this routine
+    await prisma.alarm.deleteMany({
+      where: {
+        userId,
+        title: {
+          contains: `Routine: ${routine.title}`,
+        },
+      },
+    });
 
     // Cancel notifications for each task
     for (const task of routine.routineTasks) {
@@ -1112,10 +1234,36 @@ export async function scheduleRoutineNotifications(
   try {
     const prisma = getPrismaClient();
     
-    const routine = await prisma.routine.findUnique({
-      where: { id: routineId },
-      include: { routineTasks: true },
-    });
+    // Retry logic for connection errors
+    let routine;
+    let retries = 0;
+    const maxRetries = 3;
+    
+    while (retries < maxRetries) {
+      try {
+        routine = await prisma.routine.findUnique({
+          where: { id: routineId },
+          include: { routineTasks: true },
+        });
+        break; // Success, exit retry loop
+      } catch (error: any) {
+        const isConnectionError = 
+          error?.code === 'P1017' || 
+          error?.message?.includes('connection') ||
+          error?.message?.includes('closed');
+        
+        if (isConnectionError && retries < maxRetries - 1) {
+          retries++;
+          logger.warn(`Database connection error when fetching routine (attempt ${retries}/${maxRetries}), retrying...`, {
+            routineId,
+            error: error.message,
+          });
+          await new Promise(resolve => setTimeout(resolve, 1000 * retries));
+          continue;
+        }
+        throw error; // Re-throw if not connection error or max retries reached
+      }
+    }
 
     if (!routine || !routine.enabled) {
       logger.info(`Routine ${routineId} not found or disabled, skipping notification scheduling`);
@@ -1183,13 +1331,229 @@ export async function scheduleRoutineNotifications(
         routine.timezone,
         task.id,
         task.title,
-        task.reminderTime
+        task.reminderTime,
+        routine.reminderBefore // Pass reminderBefore so alarm can be created at reminder time
       );
     }
 
     logger.info(`Scheduled notifications for all tasks in routine ${routineId}`);
   } catch (error) {
     logger.error(`Failed to schedule notifications for routine ${routineId}:`, error);
+  }
+}
+
+/**
+ * Create an alarm for a routine reminder time
+ * This creates a recurring alarm that matches the routine frequency
+ */
+async function createAlarmForRoutineReminder(
+  routineId: string,
+  taskId: string,
+  userId: string,
+  routineTitle: string,
+  taskTitle: string,
+  nextOccurrence: Date,
+  frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY',
+  schedule: { time?: string; days?: number[]; day?: number },
+  timezone: string,
+  reminderTime: string | null | undefined,
+  reminderSchedule: any,
+  reminderBefore?: string | null
+): Promise<void> {
+  try {
+    const prisma = getPrismaClient();
+    
+    // Cancel existing alarms for this routine task
+    try {
+      await prisma.alarm.deleteMany({
+        where: {
+          userId,
+          title: {
+            contains: `Routine: ${routineTitle}`,
+          },
+        },
+      });
+    } catch (deleteError: any) {
+      logger.warn(`Failed to delete existing alarms for routine, continuing anyway:`, {
+        error: deleteError,
+        routineId,
+        routineTitle,
+      });
+      // Continue - we'll try to create the alarm anyway
+    }
+
+    // Calculate alarm time based on reminderTime
+    // reminderTime is already the calculated alarm time (e.g., "02:24" when reminderBefore is "1h" and routine is "03:24")
+    // If reminderTime is provided and is in HH:mm format, use it directly
+    // Otherwise, default to routine schedule time
+    let alarmHours: number;
+    let alarmMinutes: number;
+    
+    if (reminderTime && reminderTime.includes(':')) {
+      // reminderTime is an absolute time (e.g., "02:24") - use it directly
+      [alarmHours, alarmMinutes] = reminderTime.split(':').map(Number);
+      logger.info(`Using provided reminderTime as alarm time: ${reminderTime}`);
+    } else {
+      // Use routine schedule time as default
+      const [routineHours, routineMinutes] = (schedule.time || '00:00').split(':').map(Number);
+      alarmHours = routineHours;
+      alarmMinutes = routineMinutes;
+    }
+
+    // Set alarm time to next occurrence with calculated hours/minutes
+    // Use setHours (local time) to match nextOccurrence which is also calculated in local time
+    // This ensures the alarm time is in the user's timezone, matching the routine schedule
+    const alarmTime = new Date(nextOccurrence);
+    alarmTime.setHours(alarmHours, alarmMinutes, 0, 0);
+    
+    // If reminderBefore is set, adjust the date based on it
+    if (reminderBefore) {
+      const match = reminderBefore.match(/^(\d+)([hdw])$/);
+      if (match) {
+        const [, valueStr, unit] = match;
+        const value = parseInt(valueStr, 10);
+        
+        if (unit === 'd') {
+          // Days before - subtract days from nextOccurrence
+          alarmTime.setDate(alarmTime.getDate() - value);
+        } else if (unit === 'w') {
+          // Weeks before - subtract weeks from nextOccurrence
+          alarmTime.setDate(alarmTime.getDate() - (value * 7));
+        }
+        // For hours ('h'), we already adjusted the time above in the hours calculation
+        // If the alarm time is earlier in the day than the routine time, we need to move it back a day
+        if (unit === 'h') {
+          // Compare alarm time to routine time on the same day
+          const routineTimeOnSameDay = new Date(nextOccurrence);
+          const [routineH, routineM] = (schedule.time || '00:00').split(':').map(Number);
+          routineTimeOnSameDay.setHours(routineH, routineM, 0, 0);
+          
+          // If alarm time is before routine time, move it to the previous day
+          if (alarmTime.getTime() < routineTimeOnSameDay.getTime()) {
+            alarmTime.setDate(alarmTime.getDate() - 1);
+          }
+        }
+      }
+    }
+    
+    // If alarm time is before nextOccurrence (for hours offset), it means we need to adjust the date
+    // For absolute times, we want the alarm at that time on the same day as nextOccurrence
+    // For relative times, the calculation above should be correct
+
+    // Generate recurrence rule based on frequency
+    let recurrenceRule: string | null = null;
+    if (frequency === 'DAILY') {
+      recurrenceRule = 'FREQ=DAILY';
+    } else if (frequency === 'WEEKLY' && schedule.days && schedule.days.length > 0) {
+      // Convert days to RRULE format (0=Sunday, 1=Monday, etc.)
+      // RRULE uses: SU,MO,TU,WE,TH,FR,SA
+      const dayNames = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+      const byDay = schedule.days.map(day => dayNames[day]).join(',');
+      recurrenceRule = `FREQ=WEEKLY;BYDAY=${byDay}`;
+    } else if (frequency === 'MONTHLY' && schedule.day) {
+      recurrenceRule = `FREQ=MONTHLY;BYMONTHDAY=${schedule.day}`;
+    } else if (frequency === 'YEARLY') {
+      // For yearly, we'd need the full date - simplified for now
+      recurrenceRule = 'FREQ=YEARLY';
+    }
+
+    // Create the alarm with error handling for database connection issues
+    let alarm;
+    try {
+      alarm = await prisma.alarm.create({
+        data: {
+          userId,
+          title: `Routine: ${routineTitle}`,
+          time: alarmTime,
+          timezone: timezone || 'UTC',
+          recurrenceRule,
+          enabled: true,
+          snoozeConfig: {
+            duration: 5, // 5 minutes snooze
+            maxSnoozes: 3,
+          },
+          smartWakeWindow: 5,
+        },
+      });
+      logger.info(`Alarm created successfully in database`, {
+        alarmId: alarm.id,
+        routineId,
+        taskId,
+        alarmTime: alarmTime.toISOString(),
+      });
+    } catch (createError: any) {
+      logger.error(`Failed to create alarm in database:`, {
+        error: createError,
+        routineId,
+        taskId,
+        alarmTime: alarmTime.toISOString(),
+        errorMessage: createError?.message,
+        errorCode: createError?.code,
+      });
+      throw createError; // Re-throw to be caught by outer try-catch
+    }
+
+    // Schedule push notification for the alarm
+    try {
+      await scheduleAlarmPushNotification({
+        id: alarm.id,
+        userId: alarm.userId,
+        title: alarm.title,
+        time: alarm.time,
+        timezone: alarm.timezone || 'UTC',
+        recurrenceRule: alarm.recurrenceRule,
+        enabled: alarm.enabled,
+      });
+      logger.info(`Push notification scheduled for alarm`, {
+        alarmId: alarm.id,
+      });
+    } catch (scheduleError: any) {
+      logger.error(`Failed to schedule push notification for alarm, but alarm was created:`, {
+        error: scheduleError,
+        alarmId: alarm.id,
+        errorMessage: scheduleError?.message,
+      });
+      // Don't throw - alarm creation succeeded, notification scheduling can be retried
+    }
+
+    // Store alarm ID in reminder schedule for reference
+    // Use try-catch to handle potential database connection issues
+    try {
+      await prisma.reminder.updateMany({
+        where: {
+          userId,
+          targetType: 'CUSTOM',
+          note: {
+            contains: taskTitle,
+          },
+        },
+        data: {
+          schedule: {
+            ...reminderSchedule,
+            alarmId: alarm.id,
+          } as any,
+        },
+      });
+    } catch (updateError: any) {
+      logger.warn(`Failed to update reminder with alarm ID, but alarm was created successfully`, {
+        error: updateError,
+        alarmId: alarm.id,
+        reminderId: reminderSchedule.taskId,
+      });
+      // Don't throw - alarm creation succeeded, reminder update is optional
+    }
+
+    logger.info(`Created alarm for routine task reminder`, {
+      alarmId: alarm.id,
+      routineId,
+      taskId,
+      alarmTime: alarmTime.toISOString(),
+      recurrenceRule,
+      reminderTime,
+    });
+  } catch (error) {
+    logger.error(`Failed to create alarm for routine reminder:`, error);
+    throw error;
   }
 }
 
