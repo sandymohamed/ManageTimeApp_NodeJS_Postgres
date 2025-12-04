@@ -161,6 +161,15 @@ class PushNotificationService {
         return false;
       }
 
+      // Detect if this is an alarm notification
+      const notificationData = payload.data || {};
+      const isAlarm = notificationData.notificationType === 'ALARM_TRIGGER' || notificationData.type === 'alarm';
+      const isTimer = notificationData.type === 'timer';
+      
+      // Use alarm channel for alarms, default for others
+      const androidChannelId = isAlarm ? 'alarm-channel-v2' : (isTimer ? 'timer-channel-v2' : 'default-channel-id');
+      const androidPriority = isAlarm ? 'high' as const : 'high' as const; // Keep high for all, but alarms will use max importance via channel
+
       // Prepare FCM messages
       const messages = tokens.map((tokenInfo: UserPushToken) => {
         // Use payload title as-is (app name is shown by OS automatically)
@@ -177,16 +186,26 @@ class PushNotificationService {
             // App name is automatically shown by the OS, so we don't prefix it here
             // Image URL can be set at notification level for web, but platform-specific is better
           },
-          data: payload.data || {},
+          data: {
+            ...notificationData,
+            // Ensure type is included in data for frontend
+            type: notificationData.type || notificationData.notificationType || 'notification',
+          },
           android: {
-            priority: 'high' as const,
+            priority: isAlarm ? 'high' as const : androidPriority,
             notification: {
               sound: payload.sound || 'default',
-              channelId: 'default-channel-id',
+              channelId: androidChannelId,
               // Add image for Android notifications (requires imageUrl)
               ...(imageUrl ? { imageUrl } : {}),
               // Ensure notification is shown even when app is in foreground
               visibility: 'public' as const,
+              // For alarms, ensure it wakes device and plays sound
+              ...(isAlarm ? {
+                defaultSound: true,
+                defaultVibrateTimings: true,
+                priority: 'max' as const,
+              } : {}),
             },
           },
           apns: {
@@ -194,6 +213,11 @@ class PushNotificationService {
               aps: {
                 sound: payload.sound || 'default',
                 badge: payload.badge,
+                // For alarms, ensure it wakes device
+                ...(isAlarm ? {
+                  'content-available': 1,
+                  'mutable-content': 1,
+                } : {}),
               },
             },
             // For iOS, add fcm_options with image for rich notifications (iOS 15+)

@@ -55,6 +55,27 @@ let prisma: PrismaClient;
 
 export const connectDatabase = async (): Promise<void> => {
   try {
+    // Parse DATABASE_URL and add connection pool parameters if not present
+    let databaseUrl = process.env.DATABASE_URL || '';
+    
+    // Add connection pool parameters to prevent "too many connections" errors
+    // Reduced to 5 connections to avoid exhausting database connection slots
+    // PostgreSQL connection pool parameters
+    if (databaseUrl && !databaseUrl.includes('connection_limit')) {
+      try {
+        const url = new URL(databaseUrl);
+        url.searchParams.set('connection_limit', '5');
+        url.searchParams.set('pool_timeout', '10');
+        databaseUrl = url.toString();
+        logger.info('Added connection pool parameters to DATABASE_URL (limit: 5)');
+      } catch (urlError) {
+        // Fallback if URL parsing fails
+        const separator = databaseUrl.includes('?') ? '&' : '?';
+        databaseUrl = `${databaseUrl}${separator}connection_limit=5&pool_timeout=10`;
+        logger.info('Added connection pool parameters to DATABASE_URL (limit: 5, fallback)');
+      }
+    }
+
     prisma = new PrismaClient({
       log: [
         { level: 'query', emit: 'event' },
@@ -64,7 +85,7 @@ export const connectDatabase = async (): Promise<void> => {
       ],
       datasources: {
         db: {
-          url: process.env.DATABASE_URL,
+          url: databaseUrl,
         },
       },
     });
@@ -141,8 +162,10 @@ export async function executeWithRetry<T>(
       const isConnectionError = 
         error?.code === 'P1017' || // Server has closed the connection
         error?.code === 'P1001' || // Can't reach database server
+        error?.code === 'P2037' || // Too many database connections
         error?.message?.includes('connection') ||
-        error?.message?.includes('closed');
+        error?.message?.includes('closed') ||
+        error?.message?.includes('connection slots');
       
       if (isConnectionError && attempt < maxRetries) {
         logger.warn(`Database connection error (attempt ${attempt}/${maxRetries}), retrying...`, {
