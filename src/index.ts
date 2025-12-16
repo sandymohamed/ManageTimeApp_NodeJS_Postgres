@@ -6,6 +6,7 @@ import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import rateLimit from 'express-rate-limit';
 
+
 import { errorHandler } from './middleware/errorHandler';
 import { logger } from './utils/logger';
 import { connectDatabase } from './utils/database';
@@ -57,6 +58,7 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
 
 // Middleware
 app.use(helmet());
@@ -163,20 +165,43 @@ async function startServer() {
 }
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
-  logger.info('SIGTERM received, shutting down gracefully');
-  server.close(() => {
+const gracefulShutdown = async (signal: string) => {
+  logger.info(`${signal} received, shutting down gracefully`);
+  
+  // Stop accepting new connections
+  server.close(async () => {
+    logger.info('HTTP server closed');
+    
+    // Disconnect from database
+    try {
+      const { disconnectDatabase } = await import('./utils/database');
+      await disconnectDatabase();
+      logger.info('Database disconnected');
+    } catch (error) {
+      logger.error('Error disconnecting database:', error);
+    }
+    
+    // Disconnect from Redis
+    try {
+      const { disconnectRedis } = await import('./utils/redis');
+      await disconnectRedis();
+      logger.info('Redis disconnected');
+    } catch (error) {
+      logger.error('Error disconnecting Redis:', error);
+    }
+    
     logger.info('Process terminated');
     process.exit(0);
   });
-});
+  
+  // Force shutdown after 10 seconds
+  setTimeout(() => {
+    logger.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+};
 
-process.on('SIGINT', () => {
-  logger.info('SIGINT received, shutting down gracefully');
-  server.close(() => {
-    logger.info('Process terminated');
-    process.exit(0);
-  });
-});
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 startServer();

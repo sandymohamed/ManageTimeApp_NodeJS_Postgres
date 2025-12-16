@@ -351,13 +351,19 @@ async function processReminderJob(job: Job): Promise<void> {
         notificationData.targetId = String(reminder.targetId);
       }
 
+      // For task and routine reminders, use alarm sound so they ring like alarms
+      const isReminderType = type === 'TASK_REMINDER' || 
+                             type === 'DUE_DATE_REMINDER' || 
+                             type === 'ROUTINE_REMINDER';
+      const soundToUse = isReminderType ? 'alarm' : 'default';
+      
       await pushNotificationService.sendPushNotification(
         userId,
         {
           title: reminder.title,
           body: reminder.note || 'Reminder',
           data: notificationData,
-          sound: 'default',
+          sound: soundToUse, // Use alarm sound for reminders so they ring
         },
         false // Already checked preferences above
       );

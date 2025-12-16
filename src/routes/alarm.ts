@@ -4,7 +4,7 @@ import { getPrismaClient } from '../utils/database';
 import { authenticateToken } from '../middleware/auth';
 import { AuthenticatedRequest, ValidationError, NotFoundError } from '../types';
 import { logger } from '../utils/logger';
-import { scheduleAlarmPushNotification, cancelAlarmPushNotifications } from '../services/notificationScheduler';
+import { scheduleAlarmPushNotification, cancelAlarmPushNotifications, cancelAllPendingAlarmNotifications } from '../services/notificationScheduler';
 
 const router = Router();
 
@@ -340,6 +340,31 @@ router.post('/:id/dismiss', async (req: AuthenticatedRequest, res: Response) => 
     return res.status(500).json({
       success: false,
       error: 'Failed to dismiss alarm',
+    });
+  }
+});
+
+// POST /api/v1/alarms/cancel-all-pending
+// Cancel all pending alarm notifications for the current user
+router.post('/cancel-all-pending', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    
+    const cancelledCount = await cancelAllPendingAlarmNotifications(userId);
+    
+    logger.info(`Cancelled ${cancelledCount} pending alarm notifications for user ${userId}`);
+    
+    return res.json({
+      success: true,
+      message: `Cancelled ${cancelledCount} pending alarm notifications`,
+      cancelledCount,
+    });
+  } catch (error: any) {
+    logger.error('Failed to cancel all pending alarm notifications:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to cancel pending alarm notifications',
+      message: error.message,
     });
   }
 });

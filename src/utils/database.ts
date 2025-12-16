@@ -53,35 +53,47 @@ import { logger } from './logger';
 
 let prisma: PrismaClient;
 
-export const connectDatabase = async (): Promise<void> => {
-  try {
-    // Parse DATABASE_URL and add connection pool parameters if not present
-    let databaseUrl = process.env.DATABASE_URL || '';
-    
-    // Add connection pool parameters to prevent "too many connections" errors
-    // Reduced to 5 connections to avoid exhausting database connection slots
-    // PostgreSQL connection pool parameters
-    if (databaseUrl && !databaseUrl.includes('connection_limit')) {
-      try {
-        const url = new URL(databaseUrl);
-        url.searchParams.set('connection_limit', '5');
-        url.searchParams.set('pool_timeout', '10');
-        databaseUrl = url.toString();
-        logger.info('Added connection pool parameters to DATABASE_URL (limit: 5)');
-      } catch (urlError) {
-        // Fallback if URL parsing fails
-        const separator = databaseUrl.includes('?') ? '&' : '?';
-        databaseUrl = `${databaseUrl}${separator}connection_limit=5&pool_timeout=10`;
-        logger.info('Added connection pool parameters to DATABASE_URL (limit: 5, fallback)');
+export const connectDatabase = async (maxRetries: number = 5, retryDelay: number = 5000): Promise<void> => {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      // Disconnect existing client if it exists (cleanup from previous connections)
+      if (prisma) {
+        try {
+          await prisma.$disconnect();
+          logger.info('Disconnected existing Prisma client before reconnecting');
+          // Wait a bit for the disconnection to complete
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (disconnectError) {
+          logger.warn('Error disconnecting existing client:', disconnectError);
+        }
       }
-    }
+      
+      // Parse DATABASE_URL and add connection pool parameters if not present
+      let databaseUrl = process.env.DATABASE_URL || '';
+      
+      // Add connection pool parameters to prevent "too many connections" errors
+      // Using 1 connection temporarily to minimize connection slot usage
+      // PostgreSQL connection pool parameters
+      if (databaseUrl && !databaseUrl.includes('connection_limit')) {
+        try {
+          const url = new URL(databaseUrl);
+          url.searchParams.set('connection_limit', '1');
+          url.searchParams.set('pool_timeout', '10');
+          databaseUrl = url.toString();
+          logger.info('Added connection pool parameters to DATABASE_URL (limit: 1)');
+        } catch (urlError) {
+          // Fallback if URL parsing fails
+          const separator = databaseUrl.includes('?') ? '&' : '?';
+          databaseUrl = `${databaseUrl}${separator}connection_limit=1&pool_timeout=10`;
+          logger.info('Added connection pool parameters to DATABASE_URL (limit: 1, fallback)');
+        }
+      }
 
     prisma = new PrismaClient({
       log: [
-        { level: 'query', emit: 'event' },
         { level: 'error', emit: 'stdout' },
-        { level: 'info', emit: 'stdout' },
         { level: 'warn', emit: 'stdout' },
+        // Removed query and info logs to reduce overhead
       ],
       datasources: {
         db: {
@@ -100,33 +112,55 @@ export const connectDatabase = async (): Promise<void> => {
       });
     }
 
-    await prisma.$connect();
-    logger.info('Database connected successfully');
-    
-    // Set up connection error handling
-    // Note: Connection pool errors are normal when idle connections are closed
-    // Prisma will automatically reconnect, so we log these as warnings in development
-    prisma.$on('error' as any, (e: any) => {
-      // Connection closed errors are common in connection pools and are handled automatically
-      const isConnectionPoolError = 
-        e?.message?.includes('connection') && 
-        e?.message?.includes('Closed') ||
-        e?.kind === 'Closed';
+      await prisma.$connect();
+      logger.info('Database connected successfully');
       
-      if (isConnectionPoolError) {
-        // These are expected - Prisma will reconnect automatically
-        // Only log in development for debugging, suppress in production
-        if (process.env.NODE_ENV === 'development') {
-          logger.debug('Connection pool error (auto-reconnecting):', e);
+      // Set up connection error handling
+      // Note: Connection pool errors are normal when idle connections are closed
+      // Prisma will automatically reconnect, so we log these as warnings in development
+      prisma.$on('error' as any, (e: any) => {
+        // Connection closed errors are common in connection pools and are handled automatically
+        const isConnectionPoolError = 
+          e?.message?.includes('connection') && 
+          e?.message?.includes('Closed') ||
+          e?.kind === 'Closed';
+        
+        if (isConnectionPoolError) {
+          // These are expected - Prisma will reconnect automatically
+          // Only log in development for debugging, suppress in production
+          if (process.env.NODE_ENV === 'development') {
+            logger.debug('Connection pool error (auto-reconnecting):', e);
+          }
+        } else {
+          // Other errors should be logged
+          logger.error('Prisma error event:', e);
         }
-      } else {
-        // Other errors should be logged
-        logger.error('Prisma error event:', e);
+      });
+      
+      // Successfully connected, exit retry loop
+      return;
+    } catch (error: any) {
+      const isConnectionLimitError = 
+        error?.code === 'P2037' || 
+        error?.message?.includes('too many database connections') ||
+        error?.message?.includes('connection slots');
+      
+      if (isConnectionLimitError && attempt < maxRetries) {
+        const delay = retryDelay * attempt; // Exponential backoff
+        logger.warn(`Database connection limit reached (attempt ${attempt}/${maxRetries}), waiting ${delay}ms before retry...`, {
+          error: error.message,
+          code: error.code,
+        });
+        
+        // Wait before retrying (connections may timeout and free up slots)
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
       }
-    });
-  } catch (error) {
-    logger.error('Failed to connect to database:', error);
-    throw error;
+      
+      // If not a connection limit error or max retries reached, throw
+      logger.error('Failed to connect to database:', error);
+      throw error;
+    }
   }
 };
 

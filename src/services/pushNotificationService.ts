@@ -161,9 +161,13 @@ class PushNotificationService {
         return false;
       }
 
-      // Detect if this is an alarm notification
+      // Detect if this is an alarm notification (includes task/routine reminders which should ring like alarms)
       const notificationData = payload.data || {};
-      const isAlarm = notificationData.notificationType === 'ALARM_TRIGGER' || notificationData.type === 'alarm';
+      const isAlarm = notificationData.notificationType === 'ALARM_TRIGGER' || 
+                      notificationData.type === 'alarm' ||
+                      notificationData.type === 'TASK_REMINDER' ||
+                      notificationData.type === 'DUE_DATE_REMINDER' ||
+                      notificationData.type === 'ROUTINE_REMINDER';
       const isTimer = notificationData.type === 'timer';
       
       // Use alarm channel for alarms, default for others
@@ -194,7 +198,7 @@ class PushNotificationService {
           android: {
             priority: isAlarm ? 'high' as const : androidPriority,
             notification: {
-              sound: payload.sound || 'default',
+              sound: isAlarm ? 'alarm' : (payload.sound || 'default'), // Use 'alarm' sound for alarms
               channelId: androidChannelId,
               // Add image for Android notifications (requires imageUrl)
               ...(imageUrl ? { imageUrl } : {}),
@@ -202,9 +206,12 @@ class PushNotificationService {
               visibility: 'public' as const,
               // For alarms, ensure it wakes device and plays sound
               ...(isAlarm ? {
-                defaultSound: true,
-                defaultVibrateTimings: true,
-                priority: 'max' as const,
+                // Note: 'sound' is already set above to 'alarm'
+                defaultSound: true, // Use default sound if custom sound fails
+                defaultVibrateTimings: true, // Use default vibration pattern
+                vibrateTimingsMillis: [0, 1000, 500, 1000, 500, 1000], // Vibrate pattern for alarms
+                priority: 'max' as const, // MAX priority for alarms
+                // Note: 'importance' is controlled by the channel, not per-notification
               } : {}),
             },
           },

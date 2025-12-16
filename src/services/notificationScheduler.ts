@@ -515,6 +515,37 @@ export async function cancelAlarmPushNotifications(alarmId: string, userId: stri
   try {
     const prisma = getPrismaClient();
 
+    // Get all notifications for this alarm
+    const notifications = await prisma.notification.findMany({
+      where: {
+        userId,
+        payload: {
+          path: ['alarmId'],
+          equals: alarmId,
+        },
+      },
+    });
+
+    // Cancel jobs in the queue
+    const { getQueue } = await import('./queueService');
+    const notificationQueue = getQueue('NOTIFICATIONS');
+    
+    for (const notification of notifications) {
+      try {
+        // Find and remove jobs for this notification
+        const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
+        for (const job of jobs) {
+          if (job.data.notificationId === notification.id) {
+            await job.remove();
+            logger.info(`Removed notification job for notification ${notification.id}`);
+          }
+        }
+      } catch (jobError) {
+        logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
+      }
+    }
+
+    // Delete notification records
     const deleted = await prisma.notification.deleteMany({
       where: {
         userId,
@@ -528,6 +559,69 @@ export async function cancelAlarmPushNotifications(alarmId: string, userId: stri
     logger.info(`Cancelled ${deleted.count} scheduled notifications for alarm ${alarmId}`);
   } catch (error) {
     logger.warn(`Failed to cancel scheduled notifications for alarm ${alarmId}:`, error);
+  }
+}
+
+/**
+ * Cancel ALL pending alarm notifications for a user.
+ * This is useful for cleaning up stale notifications.
+ */
+export async function cancelAllPendingAlarmNotifications(userId: string): Promise<number> {
+  try {
+    const prisma = getPrismaClient();
+
+    // Get all pending alarm notifications for this user
+    const notifications = await prisma.notification.findMany({
+      where: {
+        userId,
+        status: 'PENDING',
+        payload: {
+          path: ['notificationType'],
+          equals: ALARM_NOTIFICATION_TYPE,
+        },
+      },
+    });
+
+    logger.info(`Found ${notifications.length} pending alarm notifications for user ${userId}`);
+
+    // Cancel jobs in the queue
+    const { getQueue } = await import('./queueService');
+    const notificationQueue = getQueue('NOTIFICATIONS');
+    
+    let cancelledJobs = 0;
+    for (const notification of notifications) {
+      try {
+        // Find and remove jobs for this notification
+        const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
+        for (const job of jobs) {
+          if (job.data.notificationId === notification.id) {
+            await job.remove();
+            cancelledJobs++;
+            logger.info(`Removed notification job for notification ${notification.id}`);
+          }
+        }
+      } catch (jobError) {
+        logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
+      }
+    }
+
+    // Delete notification records
+    const deleted = await prisma.notification.deleteMany({
+      where: {
+        userId,
+        status: 'PENDING',
+        payload: {
+          path: ['notificationType'],
+          equals: ALARM_NOTIFICATION_TYPE,
+        },
+      },
+    });
+
+    logger.info(`Cancelled ${deleted.count} pending alarm notifications for user ${userId}`);
+    return deleted.count;
+  } catch (error) {
+    logger.error(`Failed to cancel all pending alarm notifications for user ${userId}:`, error);
+    throw error;
   }
 }
 
@@ -600,7 +694,8 @@ export async function scheduleAlarmPushNotification(alarm: AlarmLike): Promise<v
   await cancelAlarmPushNotifications(alarm.id, alarm.userId);
 
   const title = `Alarm: ${alarm.title}`;
-  const body = `It's time for "${alarm.title}".`;
+  const alarmTimeStr = scheduledAlarmTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const body = `It's time for "${alarm.title}" at ${alarmTimeStr}.`;
 
   try {
     const notification = await prisma.notification.create({
@@ -612,6 +707,7 @@ export async function scheduleAlarmPushNotification(alarm: AlarmLike): Promise<v
           body,
           alarmId: alarm.id,
           notificationType: ALARM_NOTIFICATION_TYPE,
+          alarmTime: scheduledAlarmTime.toISOString(), // Add alarm time for debugging
         },
         scheduledFor: scheduledAlarmTime,
         status: 'PENDING',
@@ -628,6 +724,7 @@ export async function scheduleAlarmPushNotification(alarm: AlarmLike): Promise<v
         body,
         alarmId: alarm.id,
         notificationType: ALARM_NOTIFICATION_TYPE,
+        alarmTime: scheduledAlarmTime.toISOString(), // Add alarm time for debugging
       }
     );
 
