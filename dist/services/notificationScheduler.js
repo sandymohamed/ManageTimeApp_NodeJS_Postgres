@@ -453,21 +453,20 @@ async function cancelAlarmPushNotifications(alarmId, userId) {
         const notificationQueue = getQueue('NOTIFICATIONS');
         if (!notificationQueue) {
             logger_1.logger.warn('Notification queue not available, skipping job cancellation');
+            return;
         }
-        else {
-            for (const notification of notifications) {
-                try {
-                    const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
-                    for (const job of jobs) {
-                        if (job.data.notificationId === notification.id) {
-                            await job.remove();
-                            logger_1.logger.info(`Removed notification job for notification ${notification.id}`);
-                        }
+        for (const notification of notifications) {
+            try {
+                const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
+                for (const job of jobs) {
+                    if (job.data.notificationId === notification.id) {
+                        await job.remove();
+                        logger_1.logger.info(`Removed notification job for notification ${notification.id}`);
                     }
                 }
-                catch (jobError) {
-                    logger_1.logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
-                }
+            }
+            catch (jobError) {
+                logger_1.logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
             }
         }
         const deleted = await prisma.notification.deleteMany({
@@ -504,22 +503,21 @@ async function cancelAllPendingAlarmNotifications(userId) {
         let cancelledJobs = 0;
         if (!notificationQueue) {
             logger_1.logger.warn('Notification queue not available, skipping job cancellation');
+            return cancelledJobs;
         }
-        else {
-            for (const notification of notifications) {
-                try {
-                    const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
-                    for (const job of jobs) {
-                        if (job.data.notificationId === notification.id) {
-                            await job.remove();
-                            cancelledJobs++;
-                            logger_1.logger.info(`Removed notification job for notification ${notification.id}`);
-                        }
+        for (const notification of notifications) {
+            try {
+                const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
+                for (const job of jobs) {
+                    if (job.data.notificationId === notification.id) {
+                        await job.remove();
+                        cancelledJobs++;
+                        logger_1.logger.info(`Removed notification job for notification ${notification.id}`);
                     }
                 }
-                catch (jobError) {
-                    logger_1.logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
-                }
+            }
+            catch (jobError) {
+                logger_1.logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
             }
         }
         const deleted = await prisma.notification.deleteMany({

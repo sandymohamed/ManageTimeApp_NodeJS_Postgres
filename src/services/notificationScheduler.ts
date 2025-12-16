@@ -532,20 +532,23 @@ export async function cancelAlarmPushNotifications(alarmId: string, userId: stri
     
     if (!notificationQueue) {
       logger.warn('Notification queue not available, skipping job cancellation');
-    } else {
-      for (const notification of notifications) {
-        try {
-          // Find and remove jobs for this notification
-          const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
-          for (const job of jobs) {
-            if (job.data.notificationId === notification.id) {
-              await job.remove();
-              logger.info(`Removed notification job for notification ${notification.id}`);
-            }
+      // Return early to satisfy TypeScript type narrowing
+      return;
+    }
+    
+    // TypeScript now knows notificationQueue is defined
+    for (const notification of notifications) {
+      try {
+        // Find and remove jobs for this notification
+        const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
+        for (const job of jobs) {
+          if (job.data.notificationId === notification.id) {
+            await job.remove();
+            logger.info(`Removed notification job for notification ${notification.id}`);
           }
-        } catch (jobError) {
-          logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
         }
+      } catch (jobError) {
+        logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
       }
     }
 
@@ -595,21 +598,24 @@ export async function cancelAllPendingAlarmNotifications(userId: string): Promis
     let cancelledJobs = 0;
     if (!notificationQueue) {
       logger.warn('Notification queue not available, skipping job cancellation');
-    } else {
-      for (const notification of notifications) {
-        try {
-          // Find and remove jobs for this notification
-          const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
-          for (const job of jobs) {
-            if (job.data.notificationId === notification.id) {
-              await job.remove();
-              cancelledJobs++;
-              logger.info(`Removed notification job for notification ${notification.id}`);
-            }
+      // Return early to satisfy TypeScript type narrowing
+      return cancelledJobs;
+    }
+    
+    // TypeScript now knows notificationQueue is defined
+    for (const notification of notifications) {
+      try {
+        // Find and remove jobs for this notification
+        const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
+        for (const job of jobs) {
+          if (job.data.notificationId === notification.id) {
+            await job.remove();
+            cancelledJobs++;
+            logger.info(`Removed notification job for notification ${notification.id}`);
           }
-        } catch (jobError) {
-          logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
         }
+      } catch (jobError) {
+        logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
       }
     }
 
