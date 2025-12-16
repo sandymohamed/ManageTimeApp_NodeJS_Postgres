@@ -295,5 +295,25 @@ router.post('/:id/dismiss', async (req, res) => {
         });
     }
 });
+router.post('/cancel-all-pending', async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const cancelledCount = await (0, notificationScheduler_1.cancelAllPendingAlarmNotifications)(userId);
+        logger_1.logger.info(`Cancelled ${cancelledCount} pending alarm notifications for user ${userId}`);
+        return res.json({
+            success: true,
+            message: `Cancelled ${cancelledCount} pending alarm notifications`,
+            cancelledCount,
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Failed to cancel all pending alarm notifications:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to cancel pending alarm notifications',
+            message: error.message,
+        });
+    }
+});
 exports.default = router;
 //# sourceMappingURL=alarm.js.map

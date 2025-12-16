@@ -58,36 +58,45 @@ class RoutineService {
         return routine;
     }
     async getUserRoutines(userId) {
+        const { executeWithRetry } = await Promise.resolve().then(() => __importStar(require('../utils/database')));
         const prisma = (0, database_1.getPrismaClient)();
-        await this.checkAndResetDueRoutinesForUser(userId);
-        const routines = await prisma.routine.findMany({
-            where: { userId },
-            include: {
-                routineTasks: {
-                    orderBy: { order: 'asc' },
-                },
-            },
-            orderBy: { createdAt: 'desc' },
-        });
-        const { scheduleRoutineNotifications } = await Promise.resolve().then(() => __importStar(require('./notificationScheduler')));
-        for (const routine of routines) {
-            if (routine.enabled && routine.reminderBefore) {
-                const reminderCount = await prisma.reminder.count({
-                    where: {
-                        userId: routine.userId,
-                        targetType: 'CUSTOM',
-                        title: {
-                            contains: `Routine Reminder: ${routine.title}`,
-                        },
+        return executeWithRetry(async () => {
+            await this.checkAndResetDueRoutinesForUser(userId);
+            const routines = await prisma.routine.findMany({
+                where: { userId },
+                include: {
+                    routineTasks: {
+                        orderBy: { order: 'asc' },
                     },
-                });
-                if (reminderCount === 0) {
-                    scheduleRoutineNotifications(routine.id, routine.userId)
-                        .catch(err => logger_1.logger.error(`Failed to reschedule reminders for routine ${routine.id}:`, err));
+                },
+                orderBy: { createdAt: 'desc' },
+            });
+            const { scheduleRoutineNotifications } = await Promise.resolve().then(() => __importStar(require('./notificationScheduler')));
+            const reschedulePromises = routines
+                .filter(routine => routine.enabled && routine.reminderBefore)
+                .map(async (routine) => {
+                try {
+                    const reminderCount = await prisma.reminder.count({
+                        where: {
+                            userId: routine.userId,
+                            targetType: 'CUSTOM',
+                            title: {
+                                contains: `Routine Reminder: ${routine.title}`,
+                            },
+                        },
+                    });
+                    if (reminderCount === 0) {
+                        scheduleRoutineNotifications(routine.id, routine.userId)
+                            .catch(err => logger_1.logger.error(`Failed to reschedule reminders for routine ${routine.id}:`, err));
+                    }
                 }
-            }
-        }
-        return routines;
+                catch (error) {
+                    logger_1.logger.error(`Error checking reminders for routine ${routine.id}:`, error);
+                }
+            });
+            Promise.all(reschedulePromises).catch(err => logger_1.logger.error('Error in parallel reminder rescheduling:', err));
+            return routines;
+        }, 3, 1000);
     }
     async getRoutineById(routineId, userId) {
         const prisma = (0, database_1.getPrismaClient)();

@@ -1,10 +1,44 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.scheduleTaskDueDateNotifications = scheduleTaskDueDateNotifications;
 exports.scheduleMilestoneDueDateNotifications = scheduleMilestoneDueDateNotifications;
 exports.checkAndNotifyOverdueMilestones = checkAndNotifyOverdueMilestones;
 exports.scheduleGoalTargetDateNotifications = scheduleGoalTargetDateNotifications;
 exports.cancelAlarmPushNotifications = cancelAlarmPushNotifications;
+exports.cancelAllPendingAlarmNotifications = cancelAllPendingAlarmNotifications;
 exports.scheduleAlarmPushNotification = scheduleAlarmPushNotification;
 exports.sendTaskAssignmentNotification = sendTaskAssignmentNotification;
 exports.sendTaskCreatedNotification = sendTaskCreatedNotification;
@@ -406,6 +440,36 @@ async function scheduleGoalTargetDateNotifications(goalId, userId, targetDate, g
 async function cancelAlarmPushNotifications(alarmId, userId) {
     try {
         const prisma = (0, database_1.getPrismaClient)();
+        const notifications = await prisma.notification.findMany({
+            where: {
+                userId,
+                payload: {
+                    path: ['alarmId'],
+                    equals: alarmId,
+                },
+            },
+        });
+        const { getQueue } = await Promise.resolve().then(() => __importStar(require('./queueService')));
+        const notificationQueue = getQueue('NOTIFICATIONS');
+        if (!notificationQueue) {
+            logger_1.logger.warn('Notification queue not available, skipping job cancellation');
+        }
+        else {
+            for (const notification of notifications) {
+                try {
+                    const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
+                    for (const job of jobs) {
+                        if (job.data.notificationId === notification.id) {
+                            await job.remove();
+                            logger_1.logger.info(`Removed notification job for notification ${notification.id}`);
+                        }
+                    }
+                }
+                catch (jobError) {
+                    logger_1.logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
+                }
+            }
+        }
         const deleted = await prisma.notification.deleteMany({
             where: {
                 userId,
@@ -421,6 +485,61 @@ async function cancelAlarmPushNotifications(alarmId, userId) {
         logger_1.logger.warn(`Failed to cancel scheduled notifications for alarm ${alarmId}:`, error);
     }
 }
+async function cancelAllPendingAlarmNotifications(userId) {
+    try {
+        const prisma = (0, database_1.getPrismaClient)();
+        const notifications = await prisma.notification.findMany({
+            where: {
+                userId,
+                status: 'PENDING',
+                payload: {
+                    path: ['notificationType'],
+                    equals: ALARM_NOTIFICATION_TYPE,
+                },
+            },
+        });
+        logger_1.logger.info(`Found ${notifications.length} pending alarm notifications for user ${userId}`);
+        const { getQueue } = await Promise.resolve().then(() => __importStar(require('./queueService')));
+        const notificationQueue = getQueue('NOTIFICATIONS');
+        let cancelledJobs = 0;
+        if (!notificationQueue) {
+            logger_1.logger.warn('Notification queue not available, skipping job cancellation');
+        }
+        else {
+            for (const notification of notifications) {
+                try {
+                    const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
+                    for (const job of jobs) {
+                        if (job.data.notificationId === notification.id) {
+                            await job.remove();
+                            cancelledJobs++;
+                            logger_1.logger.info(`Removed notification job for notification ${notification.id}`);
+                        }
+                    }
+                }
+                catch (jobError) {
+                    logger_1.logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
+                }
+            }
+        }
+        const deleted = await prisma.notification.deleteMany({
+            where: {
+                userId,
+                status: 'PENDING',
+                payload: {
+                    path: ['notificationType'],
+                    equals: ALARM_NOTIFICATION_TYPE,
+                },
+            },
+        });
+        logger_1.logger.info(`Cancelled ${deleted.count} pending alarm notifications for user ${userId}`);
+        return deleted.count;
+    }
+    catch (error) {
+        logger_1.logger.error(`Failed to cancel all pending alarm notifications for user ${userId}:`, error);
+        throw error;
+    }
+}
 async function scheduleAlarmPushNotification(alarm) {
     const now = new Date();
     const alarmTime = new Date(alarm.time);
@@ -434,15 +553,47 @@ async function scheduleAlarmPushNotification(alarm) {
         await cancelAlarmPushNotifications(alarm.id, alarm.userId);
         return;
     }
-    if (alarmTime.getTime() <= now.getTime() + 5000) {
-        logger_1.logger.warn(`Alarm ${alarm.id} time is in the past or too soon (${alarmTime.toISOString()}), skipping scheduling`);
+    let scheduledAlarmTime = alarmTime;
+    if (alarm.recurrenceRule && alarmTime.getTime() <= now.getTime()) {
+        if (alarm.recurrenceRule.startsWith('FREQ=DAILY')) {
+            scheduledAlarmTime = new Date(alarmTime);
+            while (scheduledAlarmTime.getTime() <= now.getTime()) {
+                scheduledAlarmTime.setDate(scheduledAlarmTime.getDate() + 1);
+            }
+            logger_1.logger.info(`Alarm ${alarm.id} time is in the past, scheduling for next occurrence: ${scheduledAlarmTime.toISOString()}`);
+        }
+        else if (alarm.recurrenceRule.startsWith('FREQ=WEEKLY')) {
+            scheduledAlarmTime = new Date(alarmTime);
+            while (scheduledAlarmTime.getTime() <= now.getTime()) {
+                scheduledAlarmTime.setDate(scheduledAlarmTime.getDate() + 7);
+            }
+            logger_1.logger.info(`Alarm ${alarm.id} time is in the past, scheduling for next occurrence: ${scheduledAlarmTime.toISOString()}`);
+        }
+        else if (alarm.recurrenceRule.startsWith('FREQ=MONTHLY')) {
+            scheduledAlarmTime = new Date(alarmTime);
+            while (scheduledAlarmTime.getTime() <= now.getTime()) {
+                scheduledAlarmTime.setMonth(scheduledAlarmTime.getMonth() + 1);
+            }
+            logger_1.logger.info(`Alarm ${alarm.id} time is in the past, scheduling for next occurrence: ${scheduledAlarmTime.toISOString()}`);
+        }
+        else {
+            if (alarmTime.getTime() < now.getTime() - 1000) {
+                logger_1.logger.warn(`Alarm ${alarm.id} time is too far in the past (${alarmTime.toISOString()}), skipping scheduling`);
+                await cancelAlarmPushNotifications(alarm.id, alarm.userId);
+                return;
+            }
+        }
+    }
+    if (scheduledAlarmTime.getTime() < now.getTime() - 1000) {
+        logger_1.logger.warn(`Alarm ${alarm.id} time is too far in the past (${scheduledAlarmTime.toISOString()}), skipping scheduling`);
         await cancelAlarmPushNotifications(alarm.id, alarm.userId);
         return;
     }
     const prisma = (0, database_1.getPrismaClient)();
     await cancelAlarmPushNotifications(alarm.id, alarm.userId);
     const title = `Alarm: ${alarm.title}`;
-    const body = `It's time for "${alarm.title}".`;
+    const alarmTimeStr = scheduledAlarmTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const body = `It's time for "${alarm.title}" at ${alarmTimeStr}.`;
     try {
         const notification = await prisma.notification.create({
             data: {
@@ -453,18 +604,20 @@ async function scheduleAlarmPushNotification(alarm) {
                     body,
                     alarmId: alarm.id,
                     notificationType: ALARM_NOTIFICATION_TYPE,
+                    alarmTime: scheduledAlarmTime.toISOString(),
                 },
-                scheduledFor: alarmTime,
+                scheduledFor: scheduledAlarmTime,
                 status: 'PENDING',
             },
         });
-        await (0, queueService_2.scheduleNotification)(notification.id, alarm.userId, alarmTime, ALARM_NOTIFICATION_TYPE, {
+        await (0, queueService_2.scheduleNotification)(notification.id, alarm.userId, scheduledAlarmTime, ALARM_NOTIFICATION_TYPE, {
             title,
             body,
             alarmId: alarm.id,
             notificationType: ALARM_NOTIFICATION_TYPE,
+            alarmTime: scheduledAlarmTime.toISOString(),
         });
-        logger_1.logger.info(`Scheduled push notification for alarm ${alarm.id} at ${alarmTime.toISOString()}`);
+        logger_1.logger.info(`Scheduled push notification for alarm ${alarm.id} at ${scheduledAlarmTime.toISOString()}`);
     }
     catch (error) {
         logger_1.logger.error(`Failed to schedule push notification for alarm ${alarm.id}:`, error);
@@ -544,7 +697,7 @@ async function sendTaskCreatedNotification(taskId, userId, taskTitle, context) {
         logger_1.logger.error(`Failed to send task created notification for ${taskId}:`, error);
     }
 }
-async function scheduleRoutineTaskNotifications(routineId, userId, routineTitle, frequency, schedule, timezone, taskId, taskTitle, reminderTime) {
+async function scheduleRoutineTaskNotifications(routineId, userId, routineTitle, frequency, schedule, timezone, taskId, taskTitle, reminderTime, reminderBefore) {
     try {
         const prisma = (0, database_1.getPrismaClient)();
         const now = new Date();
@@ -648,6 +801,11 @@ async function scheduleRoutineTaskNotifications(routineId, userId, routineTitle,
             routineId,
             taskId,
         });
+        const fullReminderSchedule = {
+            ...reminderSchedule,
+            routineId: routineId,
+            taskId: taskId,
+        };
         const reminder = await prisma.reminder.create({
             data: {
                 userId,
@@ -656,11 +814,7 @@ async function scheduleRoutineTaskNotifications(routineId, userId, routineTitle,
                 title: `Routine: ${routineTitle}`,
                 note: `Time to complete "${taskTitle}"`,
                 triggerType: 'TIME',
-                schedule: {
-                    ...reminderSchedule,
-                    routineId: routineId,
-                    taskId: taskId,
-                },
+                schedule: fullReminderSchedule,
             },
         });
         try {
@@ -688,6 +842,51 @@ async function scheduleRoutineTaskNotifications(routineId, userId, routineTitle,
                 delay,
                 delayMinutes: Math.round(delay / 60000),
             });
+            try {
+                let alarmTimeForReminder;
+                if (reminderBefore) {
+                    const match = reminderBefore.match(/^(\d+)([hdw])$/);
+                    if (match) {
+                        const [, valueStr, unit] = match;
+                        const value = parseInt(valueStr, 10);
+                        const [routineHours, routineMinutes] = (schedule.time || '00:00').split(':').map(Number);
+                        let alarmHours = routineHours;
+                        let alarmMinutes = routineMinutes;
+                        if (unit === 'h') {
+                            alarmHours = routineHours - value;
+                            if (alarmHours < 0) {
+                                alarmHours += 24;
+                            }
+                        }
+                        else if (unit === 'd') {
+                            alarmHours = routineHours;
+                            alarmMinutes = routineMinutes;
+                        }
+                        else if (unit === 'w') {
+                            alarmHours = routineHours;
+                            alarmMinutes = routineMinutes;
+                        }
+                        alarmTimeForReminder = `${String(alarmHours).padStart(2, '0')}:${String(alarmMinutes).padStart(2, '0')}`;
+                        logger_1.logger.info(`Calculated alarm time from reminderBefore: routine ${schedule.time}, reminderBefore ${reminderBefore}, alarm time ${alarmTimeForReminder}`);
+                    }
+                    else {
+                        alarmTimeForReminder = reminderTime || schedule.time || '00:00';
+                    }
+                }
+                else {
+                    alarmTimeForReminder = reminderTime || schedule.time || '00:00';
+                }
+                await createAlarmForRoutineReminder(routineId, taskId, userId, routineTitle, taskTitle, nextOccurrence, frequency, schedule, timezone, alarmTimeForReminder, fullReminderSchedule, reminderBefore);
+            }
+            catch (alarmError) {
+                logger_1.logger.error(`Failed to create alarm for routine task reminder ${taskId}:`, {
+                    error: alarmError,
+                    taskId,
+                    routineId,
+                    reminderTime: reminderTime || 'routine time',
+                    reminderBefore,
+                });
+            }
         }
         catch (scheduleError) {
             logger_1.logger.error(`Failed to schedule reminder job for routine task ${taskId}:`, {
@@ -743,6 +942,14 @@ async function cancelRoutineNotifications(routineId, userId) {
         if (!routine) {
             return;
         }
+        await prisma.alarm.deleteMany({
+            where: {
+                userId,
+                title: {
+                    contains: `Routine: ${routine.title}`,
+                },
+            },
+        });
         for (const task of routine.routineTasks) {
             await cancelRoutineTaskNotifications(task.id, userId);
         }
@@ -838,10 +1045,33 @@ async function scheduleRoutineReminderNotification(routineId, userId, routineTit
 async function scheduleRoutineNotifications(routineId, _userId) {
     try {
         const prisma = (0, database_1.getPrismaClient)();
-        const routine = await prisma.routine.findUnique({
-            where: { id: routineId },
-            include: { routineTasks: true },
-        });
+        let routine;
+        let retries = 0;
+        const maxRetries = 3;
+        while (retries < maxRetries) {
+            try {
+                routine = await prisma.routine.findUnique({
+                    where: { id: routineId },
+                    include: { routineTasks: true },
+                });
+                break;
+            }
+            catch (error) {
+                const isConnectionError = error?.code === 'P1017' ||
+                    error?.message?.includes('connection') ||
+                    error?.message?.includes('closed');
+                if (isConnectionError && retries < maxRetries - 1) {
+                    retries++;
+                    logger_1.logger.warn(`Database connection error when fetching routine (attempt ${retries}/${maxRetries}), retrying...`, {
+                        routineId,
+                        error: error.message,
+                    });
+                    await new Promise(resolve => setTimeout(resolve, 1000 * retries));
+                    continue;
+                }
+                throw error;
+            }
+        }
         if (!routine || !routine.enabled) {
             logger_1.logger.info(`Routine ${routineId} not found or disabled, skipping notification scheduling`);
             return;
@@ -885,12 +1115,175 @@ async function scheduleRoutineNotifications(routineId, _userId) {
             await scheduleRoutineReminderNotification(routine.id, routine.userId, routine.title, routine.frequency, schedule, routine.timezone, routine.reminderBefore, nextOccurrence);
         }
         for (const task of routine.routineTasks) {
-            await scheduleRoutineTaskNotifications(routine.id, routine.userId, routine.title, routine.frequency, schedule, routine.timezone, task.id, task.title, task.reminderTime);
+            await scheduleRoutineTaskNotifications(routine.id, routine.userId, routine.title, routine.frequency, schedule, routine.timezone, task.id, task.title, task.reminderTime, routine.reminderBefore);
         }
         logger_1.logger.info(`Scheduled notifications for all tasks in routine ${routineId}`);
     }
     catch (error) {
         logger_1.logger.error(`Failed to schedule notifications for routine ${routineId}:`, error);
+    }
+}
+async function createAlarmForRoutineReminder(routineId, taskId, userId, routineTitle, taskTitle, nextOccurrence, frequency, schedule, timezone, reminderTime, reminderSchedule, reminderBefore) {
+    try {
+        const prisma = (0, database_1.getPrismaClient)();
+        try {
+            await prisma.alarm.deleteMany({
+                where: {
+                    userId,
+                    title: {
+                        contains: `Routine: ${routineTitle}`,
+                    },
+                },
+            });
+        }
+        catch (deleteError) {
+            logger_1.logger.warn(`Failed to delete existing alarms for routine, continuing anyway:`, {
+                error: deleteError,
+                routineId,
+                routineTitle,
+            });
+        }
+        let alarmHours;
+        let alarmMinutes;
+        if (reminderTime && reminderTime.includes(':')) {
+            [alarmHours, alarmMinutes] = reminderTime.split(':').map(Number);
+            logger_1.logger.info(`Using provided reminderTime as alarm time: ${reminderTime}`);
+        }
+        else {
+            const [routineHours, routineMinutes] = (schedule.time || '00:00').split(':').map(Number);
+            alarmHours = routineHours;
+            alarmMinutes = routineMinutes;
+        }
+        const alarmTime = new Date(nextOccurrence);
+        alarmTime.setHours(alarmHours, alarmMinutes, 0, 0);
+        if (reminderBefore) {
+            const match = reminderBefore.match(/^(\d+)([hdw])$/);
+            if (match) {
+                const [, valueStr, unit] = match;
+                const value = parseInt(valueStr, 10);
+                if (unit === 'd') {
+                    alarmTime.setDate(alarmTime.getDate() - value);
+                }
+                else if (unit === 'w') {
+                    alarmTime.setDate(alarmTime.getDate() - (value * 7));
+                }
+                if (unit === 'h') {
+                    const routineTimeOnSameDay = new Date(nextOccurrence);
+                    const [routineH, routineM] = (schedule.time || '00:00').split(':').map(Number);
+                    routineTimeOnSameDay.setHours(routineH, routineM, 0, 0);
+                    if (alarmTime.getTime() < routineTimeOnSameDay.getTime()) {
+                        alarmTime.setDate(alarmTime.getDate() - 1);
+                    }
+                }
+            }
+        }
+        let recurrenceRule = null;
+        if (frequency === 'DAILY') {
+            recurrenceRule = 'FREQ=DAILY';
+        }
+        else if (frequency === 'WEEKLY' && schedule.days && schedule.days.length > 0) {
+            const dayNames = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+            const byDay = schedule.days.map(day => dayNames[day]).join(',');
+            recurrenceRule = `FREQ=WEEKLY;BYDAY=${byDay}`;
+        }
+        else if (frequency === 'MONTHLY' && schedule.day) {
+            recurrenceRule = `FREQ=MONTHLY;BYMONTHDAY=${schedule.day}`;
+        }
+        else if (frequency === 'YEARLY') {
+            recurrenceRule = 'FREQ=YEARLY';
+        }
+        let alarm;
+        try {
+            alarm = await prisma.alarm.create({
+                data: {
+                    userId,
+                    title: `Routine: ${routineTitle}`,
+                    time: alarmTime,
+                    timezone: timezone || 'UTC',
+                    recurrenceRule,
+                    enabled: true,
+                    snoozeConfig: {
+                        duration: 5,
+                        maxSnoozes: 3,
+                    },
+                    smartWakeWindow: 5,
+                },
+            });
+            logger_1.logger.info(`Alarm created successfully in database`, {
+                alarmId: alarm.id,
+                routineId,
+                taskId,
+                alarmTime: alarmTime.toISOString(),
+            });
+        }
+        catch (createError) {
+            logger_1.logger.error(`Failed to create alarm in database:`, {
+                error: createError,
+                routineId,
+                taskId,
+                alarmTime: alarmTime.toISOString(),
+                errorMessage: createError?.message,
+                errorCode: createError?.code,
+            });
+            throw createError;
+        }
+        try {
+            await scheduleAlarmPushNotification({
+                id: alarm.id,
+                userId: alarm.userId,
+                title: alarm.title,
+                time: alarm.time,
+                timezone: alarm.timezone || 'UTC',
+                recurrenceRule: alarm.recurrenceRule,
+                enabled: alarm.enabled,
+            });
+            logger_1.logger.info(`Push notification scheduled for alarm`, {
+                alarmId: alarm.id,
+            });
+        }
+        catch (scheduleError) {
+            logger_1.logger.error(`Failed to schedule push notification for alarm, but alarm was created:`, {
+                error: scheduleError,
+                alarmId: alarm.id,
+                errorMessage: scheduleError?.message,
+            });
+        }
+        try {
+            await prisma.reminder.updateMany({
+                where: {
+                    userId,
+                    targetType: 'CUSTOM',
+                    note: {
+                        contains: taskTitle,
+                    },
+                },
+                data: {
+                    schedule: {
+                        ...reminderSchedule,
+                        alarmId: alarm.id,
+                    },
+                },
+            });
+        }
+        catch (updateError) {
+            logger_1.logger.warn(`Failed to update reminder with alarm ID, but alarm was created successfully`, {
+                error: updateError,
+                alarmId: alarm.id,
+                reminderId: reminderSchedule.taskId,
+            });
+        }
+        logger_1.logger.info(`Created alarm for routine task reminder`, {
+            alarmId: alarm.id,
+            routineId,
+            taskId,
+            alarmTime: alarmTime.toISOString(),
+            recurrenceRule,
+            reminderTime,
+        });
+    }
+    catch (error) {
+        logger_1.logger.error(`Failed to create alarm for routine reminder:`, error);
+        throw error;
     }
 }
 //# sourceMappingURL=notificationScheduler.js.map

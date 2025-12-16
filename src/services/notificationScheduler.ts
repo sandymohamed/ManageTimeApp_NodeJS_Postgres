@@ -530,7 +530,9 @@ export async function cancelAlarmPushNotifications(alarmId: string, userId: stri
     const { getQueue } = await import('./queueService');
     const notificationQueue = getQueue('NOTIFICATIONS');
     
-    if (notificationQueue) {
+    if (!notificationQueue) {
+      logger.warn('Notification queue not available, skipping job cancellation');
+    } else {
       for (const notification of notifications) {
         try {
           // Find and remove jobs for this notification
@@ -591,7 +593,9 @@ export async function cancelAllPendingAlarmNotifications(userId: string): Promis
     const notificationQueue = getQueue('NOTIFICATIONS');
     
     let cancelledJobs = 0;
-    if (notificationQueue) {
+    if (!notificationQueue) {
+      logger.warn('Notification queue not available, skipping job cancellation');
+    } else {
       for (const notification of notifications) {
         try {
           // Find and remove jobs for this notification

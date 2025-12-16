@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -131,19 +164,35 @@ async function startServer() {
         process.exit(1);
     }
 }
-process.on('SIGTERM', () => {
-    logger_1.logger.info('SIGTERM received, shutting down gracefully');
-    server.close(() => {
+const gracefulShutdown = async (signal) => {
+    logger_1.logger.info(`${signal} received, shutting down gracefully`);
+    server.close(async () => {
+        logger_1.logger.info('HTTP server closed');
+        try {
+            const { disconnectDatabase } = await Promise.resolve().then(() => __importStar(require('./utils/database')));
+            await disconnectDatabase();
+            logger_1.logger.info('Database disconnected');
+        }
+        catch (error) {
+            logger_1.logger.error('Error disconnecting database:', error);
+        }
+        try {
+            const { disconnectRedis } = await Promise.resolve().then(() => __importStar(require('./utils/redis')));
+            await disconnectRedis();
+            logger_1.logger.info('Redis disconnected');
+        }
+        catch (error) {
+            logger_1.logger.error('Error disconnecting Redis:', error);
+        }
         logger_1.logger.info('Process terminated');
         process.exit(0);
     });
-});
-process.on('SIGINT', () => {
-    logger_1.logger.info('SIGINT received, shutting down gracefully');
-    server.close(() => {
-        logger_1.logger.info('Process terminated');
-        process.exit(0);
-    });
-});
+    setTimeout(() => {
+        logger_1.logger.error('Forced shutdown after timeout');
+        process.exit(1);
+    }, 10000);
+};
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 startServer();
 //# sourceMappingURL=index.js.map

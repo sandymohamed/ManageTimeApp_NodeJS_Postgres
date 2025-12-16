@@ -145,6 +145,15 @@ class PushNotificationService {
                 logger_1.logger.warn(`No push tokens found for user ${userId}`);
                 return false;
             }
+            const notificationData = payload.data || {};
+            const isAlarm = notificationData.notificationType === 'ALARM_TRIGGER' ||
+                notificationData.type === 'alarm' ||
+                notificationData.type === 'TASK_REMINDER' ||
+                notificationData.type === 'DUE_DATE_REMINDER' ||
+                notificationData.type === 'ROUTINE_REMINDER';
+            const isTimer = notificationData.type === 'timer';
+            const androidChannelId = isAlarm ? 'alarm-channel-v2' : (isTimer ? 'timer-channel-v2' : 'default-channel-id');
+            const androidPriority = isAlarm ? 'high' : 'high';
             const messages = tokens.map((tokenInfo) => {
                 const notificationTitle = payload.title || APP_NAME;
                 const imageUrl = payload.imageUrl || APP_LOGO_URL || undefined;
@@ -154,14 +163,23 @@ class PushNotificationService {
                         title: notificationTitle,
                         body: payload.body,
                     },
-                    data: payload.data || {},
+                    data: {
+                        ...notificationData,
+                        type: notificationData.type || notificationData.notificationType || 'notification',
+                    },
                     android: {
-                        priority: 'high',
+                        priority: isAlarm ? 'high' : androidPriority,
                         notification: {
-                            sound: payload.sound || 'default',
-                            channelId: 'default-channel-id',
+                            sound: isAlarm ? 'alarm' : (payload.sound || 'default'),
+                            channelId: androidChannelId,
                             ...(imageUrl ? { imageUrl } : {}),
                             visibility: 'public',
+                            ...(isAlarm ? {
+                                defaultSound: true,
+                                defaultVibrateTimings: true,
+                                vibrateTimingsMillis: [0, 1000, 500, 1000, 500, 1000],
+                                priority: 'max',
+                            } : {}),
                         },
                     },
                     apns: {
@@ -169,6 +187,10 @@ class PushNotificationService {
                             aps: {
                                 sound: payload.sound || 'default',
                                 badge: payload.badge,
+                                ...(isAlarm ? {
+                                    'content-available': 1,
+                                    'mutable-content': 1,
+                                } : {}),
                             },
                         },
                         ...(imageUrl ? {

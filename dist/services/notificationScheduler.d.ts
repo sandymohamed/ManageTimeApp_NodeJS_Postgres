@@ -12,6 +12,7 @@ export declare function scheduleMilestoneDueDateNotifications(milestoneId: strin
 export declare function checkAndNotifyOverdueMilestones(): Promise<void>;
 export declare function scheduleGoalTargetDateNotifications(goalId: string, userId: string, targetDate: Date, goalTitle: string): Promise<void>;
 export declare function cancelAlarmPushNotifications(alarmId: string, userId: string): Promise<void>;
+export declare function cancelAllPendingAlarmNotifications(userId: string): Promise<number>;
 export declare function scheduleAlarmPushNotification(alarm: AlarmLike): Promise<void>;
 export declare function sendTaskAssignmentNotification(taskId: string, assigneeId: string, taskTitle: string, assignerName?: string): Promise<void>;
 export declare function sendTaskCreatedNotification(taskId: string, userId: string, taskTitle: string, context?: {
@@ -21,7 +22,7 @@ export declare function scheduleRoutineTaskNotifications(routineId: string, user
     time?: string;
     days?: number[];
     day?: number;
-}, timezone: string, taskId: string, taskTitle: string, reminderTime?: string | null): Promise<void>;
+}, timezone: string, taskId: string, taskTitle: string, reminderTime?: string | null, reminderBefore?: string | null): Promise<void>;
 export declare function cancelRoutineTaskNotifications(taskId: string, userId: string): Promise<void>;
 export declare function cancelRoutineNotifications(routineId: string, userId: string): Promise<void>;
 export declare function scheduleRoutineReminderNotification(routineId: string, userId: string, routineTitle: string, frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY', schedule: {

@@ -85,6 +85,7 @@ router.get('/', async (req, res) => {
         });
     }
     catch (error) {
+        console.log('Failed to get routines:', error);
         logger_1.logger.error('Failed to get routines:', error);
         return res.status(500).json({
             success: false,
@@ -109,14 +110,47 @@ router.post('/', async (req, res) => {
             value.reminderBefore = undefined;
         }
         const routine = await routineService_1.routineService.createRoutine(userId, value);
-        if (routine.enabled) {
-            (0, notificationScheduler_1.scheduleRoutineNotifications)(routine.id, userId)
-                .catch(err => logger_1.logger.error('Failed to schedule routine notifications:', err));
+        try {
+            await routineService_1.routineService.addTaskToRoutine(routine.id, userId, {
+                title: value.title,
+                description: value.description,
+                order: 0,
+            });
+            let routineWithTask;
+            try {
+                routineWithTask = await routineService_1.routineService.getRoutineById(routine.id, userId);
+            }
+            catch (getError) {
+                if (getError?.code === 'P1017' || getError?.message?.includes('connection')) {
+                    logger_1.logger.warn('Connection error when getting routine, retrying...', { routineId: routine.id });
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    routineWithTask = await routineService_1.routineService.getRoutineById(routine.id, userId);
+                }
+                else {
+                    throw getError;
+                }
+            }
+            if (routineWithTask && routineWithTask.enabled) {
+                (0, notificationScheduler_1.scheduleRoutineNotifications)(routine.id, userId)
+                    .catch(err => logger_1.logger.error('Failed to schedule routine notifications:', err));
+            }
+            return res.status(201).json({
+                success: true,
+                data: routineWithTask || routine,
+            });
         }
-        return res.status(201).json({
-            success: true,
-            data: routine,
-        });
+        catch (taskError) {
+            logger_1.logger.error('Failed to create automatic task for routine:', taskError);
+            if (routine.enabled) {
+                (0, notificationScheduler_1.scheduleRoutineNotifications)(routine.id, userId)
+                    .catch(err => logger_1.logger.error('Failed to schedule routine notifications:', err));
+            }
+            return res.status(201).json({
+                success: true,
+                data: routine,
+                warning: 'Routine created but automatic task creation failed',
+            });
+        }
     }
     catch (error) {
         logger_1.logger.error('Failed to create routine:', error);
@@ -168,6 +202,39 @@ router.put('/:routineId', async (req, res) => {
             value.reminderBefore = undefined;
         }
         const routine = await routineService_1.routineService.updateRoutine(routineId, userId, value);
+        if (value.title !== undefined || value.description !== undefined) {
+            try {
+                const routineTasks = routine.routineTasks || [];
+                if (routineTasks.length > 0) {
+                    const taskToUpdate = routineTasks[0];
+                    const updateTaskData = {};
+                    if (value.title !== undefined) {
+                        updateTaskData.title = value.title;
+                    }
+                    if (value.description !== undefined) {
+                        updateTaskData.description = value.description || null;
+                    }
+                    await routineService_1.routineService.updateRoutineTask(taskToUpdate.id, userId, updateTaskData);
+                    const updatedRoutine = await routineService_1.routineService.getRoutineById(routineId, userId);
+                    if (updatedRoutine && updatedRoutine.enabled) {
+                        await (0, notificationScheduler_1.cancelRoutineNotifications)(routineId, userId);
+                        (0, notificationScheduler_1.scheduleRoutineNotifications)(routineId, userId)
+                            .catch(err => logger_1.logger.error('Failed to schedule routine notifications:', err));
+                    }
+                    else {
+                        (0, notificationScheduler_1.cancelRoutineNotifications)(routineId, userId)
+                            .catch(err => logger_1.logger.error('Failed to cancel routine notifications:', err));
+                    }
+                    return res.json({
+                        success: true,
+                        data: updatedRoutine || routine,
+                    });
+                }
+            }
+            catch (taskError) {
+                logger_1.logger.error('Failed to update routine task:', taskError);
+            }
+        }
         if (routine.enabled) {
             await (0, notificationScheduler_1.cancelRoutineNotifications)(routineId, userId);
             (0, notificationScheduler_1.scheduleRoutineNotifications)(routineId, userId)

@@ -304,11 +304,15 @@ async function processReminderJob(job) {
             if (reminder.targetId) {
                 notificationData.targetId = String(reminder.targetId);
             }
+            const isReminderType = type === 'TASK_REMINDER' ||
+                type === 'DUE_DATE_REMINDER' ||
+                type === 'ROUTINE_REMINDER';
+            const soundToUse = isReminderType ? 'alarm' : 'default';
             await pushNotificationService.sendPushNotification(userId, {
                 title: reminder.title,
                 body: reminder.note || 'Reminder',
                 data: notificationData,
-                sound: 'default',
+                sound: soundToUse,
             }, false);
             logger_1.logger.info(`Push notification sent successfully for reminder ${reminderId}`);
         }
