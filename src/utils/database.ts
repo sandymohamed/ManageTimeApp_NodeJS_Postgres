@@ -54,38 +54,49 @@ import { logger } from './logger';
 let prisma: PrismaClient;
 
 export const connectDatabase = async (maxRetries: number = 5, retryDelay: number = 5000): Promise<void> => {
+  // If prisma client already exists and is connected, don't reconnect
+  if (prisma) {
+    try {
+      // Test if connection is alive with a simple query (use timeout to avoid hanging)
+      await Promise.race([
+        prisma.$queryRaw`SELECT 1`,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Connection test timeout')), 2000))
+      ]);
+      logger.debug('Database connection is already active, skipping reconnect');
+      return;
+    } catch (testError: any) {
+      // Connection is dead or test timed out, we need to reconnect
+      const errorMsg = testError?.message || String(testError);
+      logger.warn('Database connection test failed, will reconnect:', errorMsg);
+      try {
+        await prisma.$disconnect();
+      } catch (disconnectError) {
+        // Ignore disconnect errors - client might already be disconnected
+      }
+      prisma = null as any; // Clear the dead client
+    }
+  }
+  
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      // Disconnect existing client if it exists (cleanup from previous connections)
-      if (prisma) {
-        try {
-          await prisma.$disconnect();
-          logger.info('Disconnected existing Prisma client before reconnecting');
-          // Wait a bit for the disconnection to complete
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        } catch (disconnectError) {
-          logger.warn('Error disconnecting existing client:', disconnectError);
-        }
-      }
-      
       // Parse DATABASE_URL and add connection pool parameters if not present
       let databaseUrl = process.env.DATABASE_URL || '';
       
       // Add connection pool parameters to prevent "too many connections" errors
-      // Using 1 connection temporarily to minimize connection slot usage
+      // Using 5 connections (reasonable for a small app) instead of 1
       // PostgreSQL connection pool parameters
       if (databaseUrl && !databaseUrl.includes('connection_limit')) {
         try {
           const url = new URL(databaseUrl);
-          url.searchParams.set('connection_limit', '1');
+          url.searchParams.set('connection_limit', '5');
           url.searchParams.set('pool_timeout', '10');
           databaseUrl = url.toString();
-          logger.info('Added connection pool parameters to DATABASE_URL (limit: 1)');
+          logger.info('Added connection pool parameters to DATABASE_URL (limit: 5)');
         } catch (urlError) {
           // Fallback if URL parsing fails
           const separator = databaseUrl.includes('?') ? '&' : '?';
-          databaseUrl = `${databaseUrl}${separator}connection_limit=1&pool_timeout=10`;
-          logger.info('Added connection pool parameters to DATABASE_URL (limit: 1, fallback)');
+          databaseUrl = `${databaseUrl}${separator}connection_limit=5&pool_timeout=10`;
+          logger.info('Added connection pool parameters to DATABASE_URL (limit: 5, fallback)');
         }
       }
 
@@ -166,10 +177,16 @@ export const connectDatabase = async (maxRetries: number = 5, retryDelay: number
 
 export const getPrismaClient = (): PrismaClient => {
   if (!prisma) {
+    // Try to connect if not connected
+    logger.warn('Prisma client not initialized, attempting to connect...');
+    // Note: This is synchronous but connectDatabase is async
+    // For now, throw error - callers should ensure connectDatabase() is called at startup
     throw new Error('Database not connected. Call connectDatabase() first.');
   }
   
-  // Check if connection is still alive, reconnect if needed
+  // Don't check connection health on every call - it's too expensive
+  // Prisma will handle reconnection automatically for most cases
+  // Only reconnect if we get an actual error
   // Note: This is a simple check, Prisma will handle reconnection automatically
   // but we can add retry logic here if needed
   
