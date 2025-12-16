@@ -129,11 +129,12 @@ export const connectDatabase = async (maxRetries: number = 5, retryDelay: number
       // Set up connection error handling
       // Note: Connection pool errors are normal when idle connections are closed
       // Prisma will automatically reconnect, so we log these as warnings in development
-      prisma.$on('error' as any, (e: any) => {
+      // Use type assertion to handle Prisma event typing
+      (prisma.$on as any)('error', (e: any) => {
         // Connection closed errors are common in connection pools and are handled automatically
         const isConnectionPoolError = 
-          e?.message?.includes('connection') && 
-          e?.message?.includes('Closed') ||
+          (e?.message?.includes('connection') && 
+          e?.message?.includes('Closed')) ||
           e?.kind === 'Closed';
         
         if (isConnectionPoolError) {

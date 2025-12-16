@@ -530,18 +530,20 @@ export async function cancelAlarmPushNotifications(alarmId: string, userId: stri
     const { getQueue } = await import('./queueService');
     const notificationQueue = getQueue('NOTIFICATIONS');
     
-    for (const notification of notifications) {
-      try {
-        // Find and remove jobs for this notification
-        const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
-        for (const job of jobs) {
-          if (job.data.notificationId === notification.id) {
-            await job.remove();
-            logger.info(`Removed notification job for notification ${notification.id}`);
+    if (notificationQueue) {
+      for (const notification of notifications) {
+        try {
+          // Find and remove jobs for this notification
+          const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
+          for (const job of jobs) {
+            if (job.data.notificationId === notification.id) {
+              await job.remove();
+              logger.info(`Removed notification job for notification ${notification.id}`);
+            }
           }
+        } catch (jobError) {
+          logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
         }
-      } catch (jobError) {
-        logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
       }
     }
 
@@ -589,19 +591,21 @@ export async function cancelAllPendingAlarmNotifications(userId: string): Promis
     const notificationQueue = getQueue('NOTIFICATIONS');
     
     let cancelledJobs = 0;
-    for (const notification of notifications) {
-      try {
-        // Find and remove jobs for this notification
-        const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
-        for (const job of jobs) {
-          if (job.data.notificationId === notification.id) {
-            await job.remove();
-            cancelledJobs++;
-            logger.info(`Removed notification job for notification ${notification.id}`);
+    if (notificationQueue) {
+      for (const notification of notifications) {
+        try {
+          // Find and remove jobs for this notification
+          const jobs = await notificationQueue.getJobs(['waiting', 'delayed', 'active']);
+          for (const job of jobs) {
+            if (job.data.notificationId === notification.id) {
+              await job.remove();
+              cancelledJobs++;
+              logger.info(`Removed notification job for notification ${notification.id}`);
+            }
           }
+        } catch (jobError) {
+          logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
         }
-      } catch (jobError) {
-        logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
       }
     }
 
