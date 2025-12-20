@@ -9,7 +9,7 @@ const router = Router();
 // Validation schemas
 const signupSchema = Joi.object({
   email: Joi.string().email().required(),
-  password: Joi.string().min(8).required(),
+  password: Joi.string().min(6).required(),
   name: Joi.string().min(2).max(100).required(),
   timezone: Joi.string().optional(),
 });
@@ -29,7 +29,7 @@ const optionalRefreshTokenSchema = Joi.object({
 
 const changePasswordSchema = Joi.object({
   currentPassword: Joi.string().required(),
-  newPassword: Joi.string().min(8).required(),
+  newPassword: Joi.string().min(6).required(),
 });
 
 const forgotPasswordSchema = Joi.object({
@@ -43,7 +43,7 @@ const verifyOTPSchema = Joi.object({
 
 const resetPasswordSchema = Joi.object({
   token: Joi.string().uuid().required(),
-  newPassword: Joi.string().min(8).required(),
+  newPassword: Joi.string().min(6).required(),
 });
 
 // POST /api/v1/auth/signup
