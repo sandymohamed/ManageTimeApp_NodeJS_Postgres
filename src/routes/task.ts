@@ -39,6 +39,7 @@ const updateTaskSchema = Joi.object({
   dueTime: Joi.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).allow(null).optional(),
   recurrenceRule: Joi.string().allow(null).optional(),
   metadata: Joi.object().optional(),
+  tags: Joi.array().items(Joi.string()).optional(), // Allow tags but will be ignored (not in Task model, only Project has tags)
 });
 
 const reorderTasksSchema = Joi.object({
@@ -444,9 +445,12 @@ router.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
       throw new NotFoundError('Task');
     }
 
+    // Remove tags from update data since Task model doesn't have tags field (only Project has tags)
+    const { tags, ...updateData } = value;
+    
     const task = await prisma.task.update({
       where: { id },
-      data: value,
+      data: updateData,
       include: {
         creator: {
           select: { id: true, name: true, email: true },

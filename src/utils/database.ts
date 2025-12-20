@@ -78,27 +78,27 @@ export const connectDatabase = async (maxRetries: number = 5, retryDelay: number
   }
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      // Parse DATABASE_URL and add connection pool parameters if not present
-      let databaseUrl = process.env.DATABASE_URL || '';
-      
-      // Add connection pool parameters to prevent "too many connections" errors
+  try {
+    // Parse DATABASE_URL and add connection pool parameters if not present
+    let databaseUrl = process.env.DATABASE_URL || '';
+    
+    // Add connection pool parameters to prevent "too many connections" errors
       // Using 5 connections (reasonable for a small app) instead of 1
-      // PostgreSQL connection pool parameters
-      if (databaseUrl && !databaseUrl.includes('connection_limit')) {
-        try {
-          const url = new URL(databaseUrl);
-          url.searchParams.set('connection_limit', '5');
-          url.searchParams.set('pool_timeout', '10');
-          databaseUrl = url.toString();
-          logger.info('Added connection pool parameters to DATABASE_URL (limit: 5)');
-        } catch (urlError) {
-          // Fallback if URL parsing fails
-          const separator = databaseUrl.includes('?') ? '&' : '?';
-          databaseUrl = `${databaseUrl}${separator}connection_limit=5&pool_timeout=10`;
-          logger.info('Added connection pool parameters to DATABASE_URL (limit: 5, fallback)');
-        }
+    // PostgreSQL connection pool parameters
+    if (databaseUrl && !databaseUrl.includes('connection_limit')) {
+      try {
+        const url = new URL(databaseUrl);
+        url.searchParams.set('connection_limit', '5');
+        url.searchParams.set('pool_timeout', '10');
+        databaseUrl = url.toString();
+        logger.info('Added connection pool parameters to DATABASE_URL (limit: 5)');
+      } catch (urlError) {
+        // Fallback if URL parsing fails
+        const separator = databaseUrl.includes('?') ? '&' : '?';
+        databaseUrl = `${databaseUrl}${separator}connection_limit=5&pool_timeout=10`;
+        logger.info('Added connection pool parameters to DATABASE_URL (limit: 5, fallback)');
       }
+    }
 
     prisma = new PrismaClient({
       log: [
@@ -123,9 +123,9 @@ export const connectDatabase = async (maxRetries: number = 5, retryDelay: number
       });
     }
 
-      await prisma.$connect();
-      logger.info('Database connected successfully');
-      
+    await prisma.$connect();
+    logger.info('Database connected successfully');
+    
       // Note: Prisma Client doesn't have a built-in 'error' event type
       // Connection pool errors are handled automatically by Prisma
       // Error events are caught through try-catch blocks and query execution
@@ -151,8 +151,8 @@ export const connectDatabase = async (maxRetries: number = 5, retryDelay: number
       }
       
       // If not a connection limit error or max retries reached, throw
-      logger.error('Failed to connect to database:', error);
-      throw error;
+    logger.error('Failed to connect to database:', error);
+    throw error;
     }
   }
 };

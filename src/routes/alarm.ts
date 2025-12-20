@@ -133,18 +133,18 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
 
     logger.info('Alarm created successfully', { alarmId: alarm.id, userId });
 
+    // NOTE: Backend push notifications are DISABLED for alarms
+    // Native Android AlarmManager handles all alarm ringing via AlarmPlayerService
+    // This prevents double-ringing (backend push notification + native alarm)
+    // The frontend schedules native alarms via ReliableAlarmService when alarms are loaded
+    // Backend push notifications are only used for task/routine reminders, not alarms
+    
+    // Cancel any existing backend push notifications for this alarm (cleanup)
     try {
-      await scheduleAlarmPushNotification({
-        id: alarm.id,
-        userId: alarm.userId,
-        title: alarm.title,
-        time: alarm.time,
-        timezone: alarm.timezone,
-        recurrenceRule: alarm.recurrenceRule,
-        enabled: alarm.enabled,
-      });
-    } catch (scheduleError) {
-      logger.error('Failed to schedule alarm push notification', { alarmId: alarm.id, error: scheduleError });
+      await cancelAlarmPushNotifications(alarm.id, alarm.userId);
+      logger.debug('Cleaned up any existing backend push notifications for alarm', { alarmId: alarm.id });
+    } catch (cancelError) {
+      logger.warn('Failed to cancel existing alarm push notifications', { alarmId: alarm.id, error: cancelError });
     }
 
     res.status(201).json({
@@ -188,18 +188,18 @@ router.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
 
     logger.info('Alarm updated successfully', { alarmId: id, userId });
 
+    // NOTE: Backend push notifications are DISABLED for alarms
+    // Native Android AlarmManager handles all alarm ringing via AlarmPlayerService
+    // This prevents double-ringing (backend push notification + native alarm)
+    // The frontend schedules native alarms via ReliableAlarmService when alarms are loaded/updated
+    // Backend push notifications are only used for task/routine reminders, not alarms
+    
+    // Cancel any existing backend push notifications for this alarm (cleanup)
     try {
-      await scheduleAlarmPushNotification({
-        id: updatedAlarm.id,
-        userId: updatedAlarm.userId,
-        title: updatedAlarm.title,
-        time: updatedAlarm.time,
-        timezone: updatedAlarm.timezone,
-        recurrenceRule: updatedAlarm.recurrenceRule,
-        enabled: updatedAlarm.enabled,
-      });
-    } catch (scheduleError) {
-      logger.error('Failed to reschedule alarm push notification', { alarmId: id, error: scheduleError });
+      await cancelAlarmPushNotifications(updatedAlarm.id, updatedAlarm.userId);
+      logger.debug('Cleaned up any existing backend push notifications for alarm', { alarmId: updatedAlarm.id });
+    } catch (cancelError) {
+      logger.warn('Failed to cancel existing alarm push notifications', { alarmId: updatedAlarm.id, error: cancelError });
     }
 
     res.json({

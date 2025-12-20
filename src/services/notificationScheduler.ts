@@ -1072,9 +1072,12 @@ export async function scheduleRoutineTaskNotifications(
             if (unit === 'h') {
               // Hours before - subtract hours from routine time
               alarmHours = routineHours - value;
-              if (alarmHours < 0) {
+              // Handle negative hours (wraps to previous day)
+              while (alarmHours < 0) {
                 alarmHours += 24; // Wrap to previous day
               }
+              // Also handle hours >= 24 (shouldn't happen but safety check)
+              alarmHours = alarmHours % 24;
             } else if (unit === 'd') {
               // Days before - keep same time, will be handled by date calculation in alarm creation
               // For now, use routine time but the date will be adjusted
@@ -1089,7 +1092,7 @@ export async function scheduleRoutineTaskNotifications(
             // Format as HH:mm
             alarmTimeForReminder = `${String(alarmHours).padStart(2, '0')}:${String(alarmMinutes).padStart(2, '0')}`;
             
-            logger.info(`Calculated alarm time from reminderBefore: routine ${schedule.time}, reminderBefore ${reminderBefore}, alarm time ${alarmTimeForReminder}`);
+            logger.info(`Calculated alarm time from reminderBefore: routine ${schedule.time}, reminderBefore ${reminderBefore}, value=${value}, unit=${unit}, routineHours=${routineHours}, alarmHours=${alarmHours}, alarm time ${alarmTimeForReminder}`);
           } else {
             // Invalid reminderBefore format, fall back to reminderTime or routine time
             alarmTimeForReminder = reminderTime || schedule.time || '00:00';
@@ -1517,6 +1520,8 @@ async function createAlarmForRoutineReminder(
     const alarmTime = new Date(nextOccurrence);
     alarmTime.setHours(alarmHours, alarmMinutes, 0, 0);
     
+    logger.info(`Initial alarm time calculation: reminderTime=${reminderTime}, alarmHours=${alarmHours}, alarmMinutes=${alarmMinutes}, nextOccurrence=${nextOccurrence.toISOString()}, alarmTime=${alarmTime.toISOString()}`);
+    
     // If reminderBefore is set, adjust the date based on it
     if (reminderBefore) {
       const match = reminderBefore.match(/^(\d+)([hdw])$/);
@@ -1532,16 +1537,21 @@ async function createAlarmForRoutineReminder(
           alarmTime.setDate(alarmTime.getDate() - (value * 7));
         }
         // For hours ('h'), we already adjusted the time above in the hours calculation
-        // If the alarm time is earlier in the day than the routine time, we need to move it back a day
+        // The alarmTime already has the correct time (e.g., 00:51 if routine is 01:51 and reminderBefore is 1h)
+        // We just need to ensure the date is correct - if alarm time is earlier in the day than routine time,
+        // the alarm should be on the previous day
         if (unit === 'h') {
           // Compare alarm time to routine time on the same day
           const routineTimeOnSameDay = new Date(nextOccurrence);
           const [routineH, routineM] = (schedule.time || '00:00').split(':').map(Number);
           routineTimeOnSameDay.setHours(routineH, routineM, 0, 0);
           
-          // If alarm time is before routine time, move it to the previous day
-          if (alarmTime.getTime() < routineTimeOnSameDay.getTime()) {
+          // If alarm time is before routine time on the same day, move alarm to previous day
+          // This handles cases like: routine at 01:51, alarm should be at 00:51 (previous day)
+          if (alarmTime.getHours() < routineH || 
+              (alarmTime.getHours() === routineH && alarmTime.getMinutes() < routineM)) {
             alarmTime.setDate(alarmTime.getDate() - 1);
+            logger.info(`Adjusted alarm date backward: alarm time ${alarmTime.getHours()}:${alarmTime.getMinutes()} is before routine time ${routineH}:${routineM}`);
           }
         }
       }
@@ -1591,6 +1601,10 @@ async function createAlarmForRoutineReminder(
         routineId,
         taskId,
         alarmTime: alarmTime.toISOString(),
+        alarmTimeLocal: `${alarmTime.getHours()}:${String(alarmTime.getMinutes()).padStart(2, '0')}`,
+        reminderBefore,
+        reminderTime,
+        scheduleTime: schedule.time,
       });
     } catch (createError: any) {
       logger.error(`Failed to create alarm in database:`, {
@@ -1604,25 +1618,20 @@ async function createAlarmForRoutineReminder(
       throw createError; // Re-throw to be caught by outer try-catch
     }
 
-    // Schedule push notification for the alarm
+    // NOTE: Backend push notifications are DISABLED for routine alarms
+    // Native Android AlarmManager handles all alarm ringing via AlarmPlayerService
+    // The frontend schedules native alarms via ReliableAlarmService when alarms are loaded
+    // Backend push notifications are only used for task/routine REMINDERS (not alarms)
+    // This prevents double-ringing and ensures consistent behavior
+    logger.debug('Routine alarm created - native alarms will handle ringing', { alarmId: alarm.id });
+    
+    // Cancel any existing backend push notifications for this alarm (cleanup)
     try {
-      await scheduleAlarmPushNotification({
-        id: alarm.id,
-        userId: alarm.userId,
-        title: alarm.title,
-        time: alarm.time,
-        timezone: alarm.timezone || 'UTC',
-        recurrenceRule: alarm.recurrenceRule,
-        enabled: alarm.enabled,
-      });
-      logger.info(`Push notification scheduled for alarm`, {
+      await cancelAlarmPushNotifications(alarm.id, userId);
+    } catch (cancelError: any) {
+      logger.warn(`Failed to cancel existing backend push notifications for routine alarm:`, {
+        error: cancelError,
         alarmId: alarm.id,
-      });
-    } catch (scheduleError: any) {
-      logger.error(`Failed to schedule push notification for alarm, but alarm was created:`, {
-        error: scheduleError,
-        alarmId: alarm.id,
-        errorMessage: scheduleError?.message,
       });
       // Don't throw - alarm creation succeeded, notification scheduling can be retried
     }

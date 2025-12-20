@@ -67,45 +67,45 @@ export class RoutineService {
     
     // Wrap the entire operation in retry logic to handle connection errors
     return executeWithRetry(async () => {
-      // First, check and reset any routines that are due
-      await this.checkAndResetDueRoutinesForUser(userId);
-      
-      const routines = await prisma.routine.findMany({
-        where: { userId },
-        include: {
-          routineTasks: {
-            orderBy: { order: 'asc' },
-          },
+    // First, check and reset any routines that are due
+    await this.checkAndResetDueRoutinesForUser(userId);
+    
+    const routines = await prisma.routine.findMany({
+      where: { userId },
+      include: {
+        routineTasks: {
+          orderBy: { order: 'asc' },
         },
-        orderBy: { createdAt: 'desc' },
-      });
+      },
+      orderBy: { createdAt: 'desc' },
+    });
 
-      // Reschedule reminders for routines that have reminderBefore but might not have reminders yet
+    // Reschedule reminders for routines that have reminderBefore but might not have reminders yet
       // Do this asynchronously to avoid blocking the response
-      const { scheduleRoutineNotifications } = await import('./notificationScheduler');
+    const { scheduleRoutineNotifications } = await import('./notificationScheduler');
       const reschedulePromises = routines
         .filter(routine => routine.enabled && routine.reminderBefore)
         .map(async (routine) => {
           try {
-            // Check if reminder exists
-            const reminderCount = await prisma.reminder.count({
-              where: {
-                userId: routine.userId,
-                targetType: 'CUSTOM',
-                title: {
-                  contains: `Routine Reminder: ${routine.title}`,
-                },
-              },
-            });
-            
+        // Check if reminder exists
+        const reminderCount = await prisma.reminder.count({
+          where: {
+            userId: routine.userId,
+            targetType: 'CUSTOM',
+            title: {
+              contains: `Routine Reminder: ${routine.title}`,
+            },
+          },
+        });
+        
             // If no reminder exists, schedule it (fire and forget)
-            if (reminderCount === 0) {
-              scheduleRoutineNotifications(routine.id, routine.userId)
-                .catch(err => logger.error(`Failed to reschedule reminders for routine ${routine.id}:`, err));
-            }
+        if (reminderCount === 0) {
+          scheduleRoutineNotifications(routine.id, routine.userId)
+            .catch(err => logger.error(`Failed to reschedule reminders for routine ${routine.id}:`, err));
+        }
           } catch (error) {
             logger.error(`Error checking reminders for routine ${routine.id}:`, error);
-          }
+      }
         });
       
       // Don't wait for rescheduling to complete - return routines immediately
@@ -114,7 +114,7 @@ export class RoutineService {
         logger.error('Error in parallel reminder rescheduling:', err)
       );
 
-      return routines;
+    return routines;
     }, 3, 1000); // Retry up to 3 times with 1 second delay
   }
 
