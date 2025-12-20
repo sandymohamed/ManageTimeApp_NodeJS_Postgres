@@ -519,6 +519,42 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.user!.id;
     const prisma = getPrismaClient();
 
+    // Check if this is a routine task
+    if (id.startsWith('routine_')) {
+      // Extract routine task ID (handle multiple formats):
+      // - routine_taskId_day_X (weekly format from backend)
+      // - routine_taskId_yyyy-MM-dd (daily format from calendar)
+      // - routine_taskId (simple format)
+      let routineTaskId = id.replace('routine_', '');
+      
+      // Remove _day_X suffix (e.g., "_day_1" -> "")
+      if (routineTaskId.includes('_day_')) {
+        routineTaskId = routineTaskId.split('_day_')[0];
+      }
+      // Remove date suffix (e.g., "_2025-11-18" -> "")
+      else if (routineTaskId.match(/_\d{4}-\d{2}-\d{2}$/)) {
+        routineTaskId = routineTaskId.replace(/_\d{4}-\d{2}-\d{2}$/, '');
+      }
+      
+      const { routineService } = await import('../services/routineService');
+      const { cancelRoutineTaskNotifications } = await import('../services/notificationScheduler');
+      
+      // Delete the routine task
+      await routineService.deleteRoutineTask(routineTaskId, userId);
+      
+      // Cancel notifications for this task
+      cancelRoutineTaskNotifications(routineTaskId, userId)
+        .catch(err => logger.error('Failed to cancel routine task notification:', err));
+      
+      logger.info('Routine task deleted successfully', { taskId: id, routineTaskId, userId });
+      
+      return res.json({
+        success: true,
+        message: 'Task deleted successfully',
+      });
+    }
+
+    // Regular task deletion
     // Check if user can delete this task
     const task = await prisma.task.findFirst({
       where: {
@@ -531,7 +567,7 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
     });
 
     if (!task) {
-      throw new NotFoundError('Task');
+      throw new NotFoundError('Task not found');
     }
 
     await prisma.task.delete({

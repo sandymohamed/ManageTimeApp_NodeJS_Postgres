@@ -352,6 +352,7 @@ async function processReminderJob(job: Job): Promise<void> {
       }
 
       // For task and routine reminders, use alarm sound so they ring like alarms
+      // NOTE: These reminders don't have native alarms, so push notifications should ring
       const isReminderType = type === 'TASK_REMINDER' || 
                              type === 'DUE_DATE_REMINDER' || 
                              type === 'ROUTINE_REMINDER';
@@ -363,7 +364,7 @@ async function processReminderJob(job: Job): Promise<void> {
           title: reminder.title,
           body: reminder.note || 'Reminder',
           data: notificationData,
-          sound: soundToUse, // Use alarm sound for reminders so they ring
+          sound: soundToUse, // Use alarm sound for reminders so they ring (they don't have native alarms)
         },
         false // Already checked preferences above
       );

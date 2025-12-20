@@ -70,6 +70,7 @@ app.use(cors({
     'http://localhost:8081', // React Native Metro bundler
     'http://192.168.1.13:8081'
   ],
+  
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']

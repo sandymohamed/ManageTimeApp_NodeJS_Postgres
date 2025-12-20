@@ -161,18 +161,20 @@ class PushNotificationService {
         return false;
       }
 
-      // Detect if this is an alarm notification (includes task/routine reminders which should ring like alarms)
+      // Detect if this is an alarm notification
+      // NOTE: For ALARM_TRIGGER types, we make push notifications SILENT because native Android AlarmManager handles ringing
+      // This prevents double-ringing (server push sound + native alarm sound)
+      // Native alarms are MORE reliable and work even when app is closed
       const notificationData = payload.data || {};
-      const isAlarm = notificationData.notificationType === 'ALARM_TRIGGER' || 
-                      notificationData.type === 'alarm' ||
-                      notificationData.type === 'TASK_REMINDER' ||
-                      notificationData.type === 'DUE_DATE_REMINDER' ||
-                      notificationData.type === 'ROUTINE_REMINDER';
+      const isAlarmTrigger = notificationData.notificationType === 'ALARM_TRIGGER' || notificationData.type === 'alarm';
+      const isReminderType = notificationData.type === 'TASK_REMINDER' ||
+                             notificationData.type === 'DUE_DATE_REMINDER' ||
+                             notificationData.type === 'ROUTINE_REMINDER';
       const isTimer = notificationData.type === 'timer';
       
-      // Use alarm channel for alarms, default for others
-      const androidChannelId = isAlarm ? 'alarm-channel-v2' : (isTimer ? 'timer-channel-v2' : 'default-channel-id');
-      const androidPriority = isAlarm ? 'high' as const : 'high' as const; // Keep high for all, but alarms will use max importance via channel
+      // Use alarm channel for alarms/reminders, default for others
+      const androidChannelId = (isAlarmTrigger || isReminderType) ? 'alarm-channel-v2' : (isTimer ? 'timer-channel-v2' : 'default-channel-id');
+      const androidPriority = 'high' as const; // Keep high for all, alarms/reminders use appropriate importance via channel
 
       // Prepare FCM messages
       const messages = tokens.map((tokenInfo: UserPushToken) => {
@@ -196,21 +198,25 @@ class PushNotificationService {
             type: notificationData.type || notificationData.notificationType || 'notification',
           },
           android: {
-            priority: isAlarm ? 'high' as const : androidPriority,
+            priority: (isAlarmTrigger || isReminderType) ? 'high' as const : androidPriority,
             notification: {
-              sound: isAlarm ? 'alarm' : (payload.sound || 'default'), // Use 'alarm' sound for alarms
+              // For ALARM_TRIGGER: Make silent - native Android AlarmManager handles ringing (prevents double-ringing)
+              // For reminders (TASK_REMINDER, DUE_DATE_REMINDER, ROUTINE_REMINDER): Keep alarm sound (they don't have native alarms)
+              // For others: Use default sound or provided sound
+              sound: isAlarmTrigger ? undefined : (isReminderType ? 'alarm' : (payload.sound || 'default')),
               channelId: androidChannelId,
               // Add image for Android notifications (requires imageUrl)
               ...(imageUrl ? { imageUrl } : {}),
               // Ensure notification is shown even when app is in foreground
               visibility: 'public' as const,
-              // For alarms, ensure it wakes device and plays sound
-              ...(isAlarm ? {
-                // Note: 'sound' is already set above to 'alarm'
+              // For reminders (not ALARM_TRIGGER): Add alarm-specific settings (sound, vibration)
+              // For ALARM_TRIGGER: No sound/vibration (silent sync only - native alarms handle ringing)
+              ...(isReminderType && !isAlarmTrigger ? {
+                // Reminder-specific Android settings (TASK_REMINDER, DUE_DATE_REMINDER, ROUTINE_REMINDER)
                 defaultSound: true, // Use default sound if custom sound fails
                 defaultVibrateTimings: true, // Use default vibration pattern
-                vibrateTimingsMillis: [0, 1000, 500, 1000, 500, 1000], // Vibrate pattern for alarms
-                priority: 'max' as const, // MAX priority for alarms
+                vibrateTimingsMillis: [0, 1000, 500, 1000, 500, 1000], // Vibrate pattern for reminders
+                priority: 'max' as const, // MAX priority for reminders
                 // Note: 'importance' is controlled by the channel, not per-notification
               } : {}),
             },
@@ -218,10 +224,13 @@ class PushNotificationService {
           apns: {
             payload: {
               aps: {
-                sound: payload.sound || 'default',
+                // For ALARM_TRIGGER: No sound (silent sync only)
+                // For reminders: Use alarm sound
+                // For others: Use default or provided sound
+                sound: isAlarmTrigger ? undefined : (isReminderType ? 'alarm' : (payload.sound || 'default')),
                 badge: payload.badge,
-                // For alarms, ensure it wakes device
-                ...(isAlarm ? {
+                // For alarms/reminders, ensure it wakes device (for sync purposes)
+                ...((isAlarmTrigger || isReminderType) ? {
                   'content-available': 1,
                   'mutable-content': 1,
                 } : {}),
