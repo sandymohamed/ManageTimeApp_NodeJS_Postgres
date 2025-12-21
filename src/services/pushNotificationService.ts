@@ -20,13 +20,7 @@ function initializeFirebase(): void {
       // Try to initialize from environment variable or service account file
       const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
-      logger.info('serviceAccountPath', serviceAccountPath);
-      logger.info('FIREBASE_PROJECT_ID', process.env.FIREBASE_PROJECT_ID);
-      logger.info('FIREBASE_PRIVATE_KEY', process.env.FIREBASE_PRIVATE_KEY);
-      logger.info('FIREBASE_CLIENT_EMAIL', process.env.FIREBASE_CLIENT_EMAIL);
-
       if (serviceAccountPath) {
-        logger.info('Initializing Firebase Admin SDK from service account path');
         // Read service account file synchronously
         const serviceAccountContent = fs.readFileSync(serviceAccountPath, 'utf8');
         const serviceAccount = JSON.parse(serviceAccountContent);
