@@ -119,18 +119,11 @@ router.post('/', async (req, res) => {
         });
         logger_1.logger.info('Alarm created successfully', { alarmId: alarm.id, userId });
         try {
-            await (0, notificationScheduler_1.scheduleAlarmPushNotification)({
-                id: alarm.id,
-                userId: alarm.userId,
-                title: alarm.title,
-                time: alarm.time,
-                timezone: alarm.timezone,
-                recurrenceRule: alarm.recurrenceRule,
-                enabled: alarm.enabled,
-            });
+            await (0, notificationScheduler_1.cancelAlarmPushNotifications)(alarm.id, alarm.userId);
+            logger_1.logger.debug('Cleaned up any existing backend push notifications for alarm', { alarmId: alarm.id });
         }
-        catch (scheduleError) {
-            logger_1.logger.error('Failed to schedule alarm push notification', { alarmId: alarm.id, error: scheduleError });
+        catch (cancelError) {
+            logger_1.logger.warn('Failed to cancel existing alarm push notifications', { alarmId: alarm.id, error: cancelError });
         }
         res.status(201).json({
             success: true,
@@ -167,18 +160,11 @@ router.put('/:id', async (req, res) => {
         });
         logger_1.logger.info('Alarm updated successfully', { alarmId: id, userId });
         try {
-            await (0, notificationScheduler_1.scheduleAlarmPushNotification)({
-                id: updatedAlarm.id,
-                userId: updatedAlarm.userId,
-                title: updatedAlarm.title,
-                time: updatedAlarm.time,
-                timezone: updatedAlarm.timezone,
-                recurrenceRule: updatedAlarm.recurrenceRule,
-                enabled: updatedAlarm.enabled,
-            });
+            await (0, notificationScheduler_1.cancelAlarmPushNotifications)(updatedAlarm.id, updatedAlarm.userId);
+            logger_1.logger.debug('Cleaned up any existing backend push notifications for alarm', { alarmId: updatedAlarm.id });
         }
-        catch (scheduleError) {
-            logger_1.logger.error('Failed to reschedule alarm push notification', { alarmId: id, error: scheduleError });
+        catch (cancelError) {
+            logger_1.logger.warn('Failed to cancel existing alarm push notifications', { alarmId: updatedAlarm.id, error: cancelError });
         }
         res.json({
             success: true,

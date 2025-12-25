@@ -105,9 +105,11 @@ async function executeWithRetry(operation, maxRetries = 3, retryDelay = 1000) {
             const isConnectionError = error?.code === 'P1017' ||
                 error?.code === 'P1001' ||
                 error?.code === 'P2037' ||
+                error?.code === 'P1008' ||
                 error?.message?.includes('connection') ||
                 error?.message?.includes('closed') ||
-                error?.message?.includes('connection slots');
+                error?.message?.includes('connection slots') ||
+                error?.message?.includes('Server has closed the connection');
             if (isConnectionError && attempt < maxRetries) {
                 logger_1.logger.warn(`Database connection error (attempt ${attempt}/${maxRetries}), retrying...`, {
                     error: error.message,
@@ -115,9 +117,15 @@ async function executeWithRetry(operation, maxRetries = 3, retryDelay = 1000) {
                 });
                 try {
                     if (prisma) {
-                        await prisma.$disconnect();
+                        try {
+                            await prisma.$disconnect();
+                        }
+                        catch (disconnectError) {
+                            logger_1.logger.debug('Error disconnecting (expected if already disconnected):', disconnectError);
+                        }
                     }
-                    await (0, exports.connectDatabase)();
+                    prisma = null;
+                    await (0, exports.connectDatabase)(3, 2000);
                 }
                 catch (reconnectError) {
                     logger_1.logger.error('Failed to reconnect to database:', reconnectError);

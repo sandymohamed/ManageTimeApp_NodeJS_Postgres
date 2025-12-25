@@ -21,6 +21,39 @@ const generatePlanSchema = Joi.object({
   }).optional(),
 });
 
+// Helper function to calculate milestone date (fallback when AI doesn't provide date)
+const calculateMilestoneDate = (
+  now: Date,
+  goalTargetDate: Date | null,
+  cumulativeDays: number,
+  totalDuration: number,
+  goalHasTargetDate: Date | null
+): Date => {
+  let milestoneDueDate: Date;
+  
+  if (goalHasTargetDate && goalTargetDate) {
+    // If goal has target date, distribute milestones from now to target date
+    // The last milestone should end on or before the target date
+    const progressRatio = cumulativeDays / totalDuration;
+    const totalDaysAvailable = Math.ceil((goalTargetDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    const daysFromStart = Math.floor(totalDaysAvailable * progressRatio);
+    
+    milestoneDueDate = new Date(now);
+    milestoneDueDate.setDate(now.getDate() + daysFromStart);
+    
+    // Ensure the last milestone doesn't exceed the target date
+    if (milestoneDueDate > goalTargetDate) {
+      milestoneDueDate = new Date(goalTargetDate);
+    }
+  } else {
+    // If no target date, use milestone durations from today
+    milestoneDueDate = new Date(now);
+    milestoneDueDate.setDate(now.getDate() + cumulativeDays);
+  }
+  
+  return milestoneDueDate;
+};
+
 // POST /api/v1/ai/generate-plan
 router.post('/generate-plan', async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -78,27 +111,29 @@ router.post('/generate-plan', async (req: AuthenticatedRequest, res: Response) =
     for (const milestoneData of plan.milestones) {
       cumulativeDays += milestoneData.durationDays;
       
-      // Calculate milestone due date
+      // Calculate milestone due date - prefer AI-generated date if available
       let milestoneDueDate: Date;
       
-      if (goal.targetDate && goalTargetDate) {
-        // If goal has target date, distribute milestones from now to target date
-        // The last milestone should end on or before the target date
-        const progressRatio = cumulativeDays / totalDuration;
-        const totalDaysAvailable = Math.ceil((goalTargetDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-        const daysFromStart = Math.floor(totalDaysAvailable * progressRatio);
-        
-        milestoneDueDate = new Date(now);
-        milestoneDueDate.setDate(now.getDate() + daysFromStart);
-        
-        // Ensure the last milestone doesn't exceed the target date
-        if (milestoneDueDate > goalTargetDate) {
-          milestoneDueDate = new Date(goalTargetDate);
+      if (milestoneData.targetDate) {
+        // Use AI-generated date if provided
+        milestoneDueDate = new Date(milestoneData.targetDate);
+        // Validate the date is valid
+        if (isNaN(milestoneDueDate.getTime())) {
+          // Fallback to calculation if AI date is invalid
+          milestoneDueDate = calculateMilestoneDate(now, goalTargetDate, cumulativeDays, totalDuration, goal.targetDate);
+        } else {
+          // Ensure AI-generated date doesn't exceed goal target date
+          if (goal.targetDate && goalTargetDate && milestoneDueDate > goalTargetDate) {
+            milestoneDueDate = new Date(goalTargetDate);
+          }
+          // Ensure AI-generated date is not before today
+          if (milestoneDueDate < now) {
+            milestoneDueDate = new Date(now);
+          }
         }
       } else {
-        // If no target date, use milestone durations from today
-        milestoneDueDate = new Date(now);
-        milestoneDueDate.setDate(now.getDate() + cumulativeDays);
+        // Fallback to calculated date if AI didn't provide one
+        milestoneDueDate = calculateMilestoneDate(now, goalTargetDate, cumulativeDays, totalDuration, goal.targetDate);
       }
       
       const milestone = await prisma.milestone.create({
@@ -214,7 +249,16 @@ router.post('/generate-plan', async (req: AuthenticatedRequest, res: Response) =
     });
   } catch (error) {
     logger.error('AI plan generation error:', error);
-    throw error;
+    
+    // Return error response instead of throwing
+    const errorMessage = error instanceof Error ? error.message : 'Failed to generate AI plan';
+    const statusCode = error instanceof ValidationError ? 400 : 500;
+    
+    return res.status(statusCode).json({
+      success: false,
+      error: errorMessage,
+      message: 'Failed to generate plan. Please try again or contact support if the issue persists.',
+    });
   }
 });
 
@@ -237,7 +281,16 @@ router.post('/generate-simple-plan', async (req: AuthenticatedRequest, res: Resp
     });
   } catch (error) {
     logger.error('Simple plan generation error:', error);
-    throw error;
+    
+    // Return error response instead of throwing
+    const errorMessage = error instanceof Error ? error.message : 'Failed to generate AI plan';
+    const statusCode = error instanceof ValidationError ? 400 : 500;
+    
+    return res.status(statusCode).json({
+      success: false,
+      error: errorMessage,
+      message: 'Failed to generate simple plan. Please try again or contact support if the issue persists.',
+    });
   }
 });
 

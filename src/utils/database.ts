@@ -166,12 +166,8 @@ export const getPrismaClient = (): PrismaClient => {
     throw new Error('Database not connected. Call connectDatabase() first.');
   }
   
-  // Don't check connection health on every call - it's too expensive
-  // Prisma will handle reconnection automatically for most cases
-  // Only reconnect if we get an actual error
-  // Note: This is a simple check, Prisma will handle reconnection automatically
-  // but we can add retry logic here if needed
-  
+  // Return the client - connection errors will be handled by executeWithRetry
+  // or by Prisma's automatic reconnection (though it's limited)
   return prisma;
 };
 
@@ -196,9 +192,11 @@ export async function executeWithRetry<T>(
         error?.code === 'P1017' || // Server has closed the connection
         error?.code === 'P1001' || // Can't reach database server
         error?.code === 'P2037' || // Too many database connections
+        error?.code === 'P1008' || // Operations timed out
         error?.message?.includes('connection') ||
         error?.message?.includes('closed') ||
-        error?.message?.includes('connection slots');
+        error?.message?.includes('connection slots') ||
+        error?.message?.includes('Server has closed the connection');
       
       if (isConnectionError && attempt < maxRetries) {
         logger.warn(`Database connection error (attempt ${attempt}/${maxRetries}), retrying...`, {
@@ -206,17 +204,26 @@ export async function executeWithRetry<T>(
           code: error.code,
         });
         
-        // Try to reconnect
+        // Try to reconnect - disconnect first if client exists
         try {
           if (prisma) {
-            await prisma.$disconnect();
+            try {
+              await prisma.$disconnect();
+            } catch (disconnectError) {
+              // Ignore disconnect errors - client might already be disconnected
+              logger.debug('Error disconnecting (expected if already disconnected):', disconnectError);
+            }
           }
-          await connectDatabase();
+          // Clear the client reference
+          prisma = null as any;
+          // Reconnect with fewer retries and shorter delay
+          await connectDatabase(3, 2000);
         } catch (reconnectError) {
           logger.error('Failed to reconnect to database:', reconnectError);
+          // Continue to retry the operation anyway - might work if connection was restored
         }
         
-        // Wait before retrying
+        // Wait before retrying with exponential backoff
         await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
         continue;
       }

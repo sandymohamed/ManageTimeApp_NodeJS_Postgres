@@ -55,7 +55,11 @@ class AIService {
                 const fallbackMessage = `OpenAI model "${this.model}" is unavailable. Set OPENAI_MODEL to a valid model (e.g. "gpt-4o-mini") or verify your API access.`;
                 throw new Error(fallbackMessage);
             }
-            throw error;
+            if (error instanceof Error && (error.message.includes('parse') || error.message.includes('Invalid response format') || error.message.includes('JSON'))) {
+                throw error;
+            }
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+            throw new Error(`AI service error: ${errorMessage}`);
         }
     }
     buildPrompt(goalTitle, goalDescription, targetDate, options) {
@@ -103,7 +107,7 @@ Make sure the plan is suitable for the requested level and available time.
 أنت خبير في التخطيط الشخصي والمهني. مهمتك هي تحويل الأهداف إلى خطط عمل مفصلة ومنظمة.
 
 يجب أن ترد دائماً بصيغة JSON صالحة مع المفاتيح التالية:
-- "milestones": مصفوفة من المعالم مع {title, duration_days, description, tasks}
+- "milestones": مصفوفة من المعالم مع {title, target_date (تنسيق ISO YYYY-MM-DD), duration_days (كبديل), description, tasks}
 - "tasks": مصفوفة مسطحة من المهام مع {title, milestone_index, due_offset_days, duration_minutes, recurrence, description}
 - "notes": نص مفيد إضافي
 
@@ -114,13 +118,14 @@ Make sure the plan is suitable for the requested level and available time.
 4. أضف تذكيرات مناسبة للمهام المهمة
 5. استخدم نبرة داعمة ومحفزة
 6. تأكد من أن الخطة قابلة للتحقيق في الوقت المحدد
+7. للمعالم: قدم target_date بتنسيق ISO (YYYY-MM-DD) لكل معلم. يجب توزيع التواريخ بالتساوي من اليوم حتى تاريخ الهدف. يجب أن ينتهي آخر معلم في تاريخ الهدف أو قبله.
       `.trim();
         }
         return `
 You are an expert personal and professional planner. Your task is to convert goals into detailed, structured action plans.
 
 You must always respond with valid JSON format containing these keys:
-- "milestones": array of milestones with {title, duration_days, description, tasks}
+- "milestones": array of milestones with {title, target_date (ISO format YYYY-MM-DD), duration_days (as fallback), description, tasks}
 - "tasks": flattened array of tasks with {title, milestone_index, due_offset_days, duration_minutes, recurrence, description}
 - "notes": additional helpful text
 
@@ -131,32 +136,63 @@ Important rules:
 4. Add appropriate reminders for important tasks
 5. Use supportive and motivating tone
 6. Ensure the plan is achievable within the given timeframe
+7. For milestones: Provide target_date in ISO format (YYYY-MM-DD) for each milestone. Dates should be distributed evenly from today to the goal target date. The last milestone should end on or before the goal target date.
     `.trim();
     }
     parseResponse(content) {
         try {
+            let jsonString = '';
             const jsonMatch = content.match(/\{[\s\S]*\}/);
-            if (!jsonMatch) {
-                throw new Error('No JSON found in response');
+            if (jsonMatch) {
+                jsonString = jsonMatch[0];
             }
-            const jsonString = jsonMatch[0];
-            const parsed = JSON.parse(jsonString);
+            else {
+                const arrayMatch = content.match(/\[[\s\S]*\]/);
+                if (arrayMatch) {
+                    jsonString = `{"data": ${arrayMatch[0]}}`;
+                }
+                else {
+                    throw new Error('No JSON found in response');
+                }
+            }
+            let cleanedJson = jsonString
+                .replace(/,(\s*[}\]])/g, '$1')
+                .replace(/'/g, '"');
+            let parsed;
+            try {
+                parsed = JSON.parse(cleanedJson);
+            }
+            catch (parseError) {
+                try {
+                    parsed = JSON.parse(jsonString);
+                }
+                catch (secondError) {
+                    logger_1.logger.error('JSON parse error details:', {
+                        originalError: parseError,
+                        cleanedError: secondError,
+                        jsonLength: jsonString.length,
+                        preview: jsonString.substring(0, 500)
+                    });
+                    throw new Error('Failed to parse JSON response from AI');
+                }
+            }
             const plan = {
-                milestones: this.validateMilestones(parsed.milestones || []),
-                tasks: this.validateTasks(parsed.tasks || []),
-                notes: parsed.notes || '',
+                milestones: this.validateMilestones(parsed.milestones || parsed.data?.milestones || []),
+                tasks: this.validateTasks(parsed.tasks || parsed.data?.tasks || []),
+                notes: parsed.notes || parsed.data?.notes || '',
             };
             return plan;
         }
         catch (error) {
             logger_1.logger.error('Failed to parse AI response:', error);
-            throw new Error('Invalid response format from AI');
+            throw new Error(`Invalid response format from AI: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
     validateMilestones(milestones) {
         return milestones.map((milestone, index) => ({
             title: milestone.title || `Milestone ${index + 1}`,
             durationDays: Math.max(1, parseInt(milestone.duration_days) || 7),
+            targetDate: milestone.target_date || milestone.targetDate || undefined,
             description: milestone.description || '',
             tasks: milestone.tasks || [],
         }));

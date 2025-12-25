@@ -11,7 +11,7 @@ const types_1 = require("../types");
 const router = (0, express_1.Router)();
 const signupSchema = joi_1.default.object({
     email: joi_1.default.string().email().required(),
-    password: joi_1.default.string().min(8).required(),
+    password: joi_1.default.string().min(6).required(),
     name: joi_1.default.string().min(2).max(100).required(),
     timezone: joi_1.default.string().optional(),
 });
@@ -27,7 +27,7 @@ const optionalRefreshTokenSchema = joi_1.default.object({
 });
 const changePasswordSchema = joi_1.default.object({
     currentPassword: joi_1.default.string().required(),
-    newPassword: joi_1.default.string().min(8).required(),
+    newPassword: joi_1.default.string().min(6).required(),
 });
 const forgotPasswordSchema = joi_1.default.object({
     email: joi_1.default.string().email().required(),
@@ -38,7 +38,7 @@ const verifyOTPSchema = joi_1.default.object({
 });
 const resetPasswordSchema = joi_1.default.object({
     token: joi_1.default.string().uuid().required(),
-    newPassword: joi_1.default.string().min(8).required(),
+    newPassword: joi_1.default.string().min(6).required(),
 });
 router.post('/signup', async (req, res) => {
     try {

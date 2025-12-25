@@ -113,7 +113,8 @@ export interface PlanGenerationRequest {
 
 export interface GeneratedMilestone {
   title: string;
-  durationDays: number;
+  durationDays: number; // Fallback if targetDate is not provided
+  targetDate?: string; // ISO date string - preferred if provided by AI
   description?: string;
   tasks: string[];
 }

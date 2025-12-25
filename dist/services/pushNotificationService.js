@@ -49,12 +49,7 @@ function initializeFirebase() {
     try {
         if (firebase_admin_1.default.apps.length === 0) {
             const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-            logger_1.logger.info('serviceAccountPath', serviceAccountPath);
-            logger_1.logger.info('FIREBASE_PROJECT_ID', process.env.FIREBASE_PROJECT_ID);
-            logger_1.logger.info('FIREBASE_PRIVATE_KEY', process.env.FIREBASE_PRIVATE_KEY);
-            logger_1.logger.info('FIREBASE_CLIENT_EMAIL', process.env.FIREBASE_CLIENT_EMAIL);
             if (serviceAccountPath) {
-                logger_1.logger.info('Initializing Firebase Admin SDK from service account path');
                 const serviceAccountContent = fs.readFileSync(serviceAccountPath, 'utf8');
                 const serviceAccount = JSON.parse(serviceAccountContent);
                 firebase_admin_1.default.initializeApp({
@@ -146,14 +141,13 @@ class PushNotificationService {
                 return false;
             }
             const notificationData = payload.data || {};
-            const isAlarm = notificationData.notificationType === 'ALARM_TRIGGER' ||
-                notificationData.type === 'alarm' ||
-                notificationData.type === 'TASK_REMINDER' ||
+            const isAlarmTrigger = notificationData.notificationType === 'ALARM_TRIGGER' || notificationData.type === 'alarm';
+            const isReminderType = notificationData.type === 'TASK_REMINDER' ||
                 notificationData.type === 'DUE_DATE_REMINDER' ||
                 notificationData.type === 'ROUTINE_REMINDER';
             const isTimer = notificationData.type === 'timer';
-            const androidChannelId = isAlarm ? 'alarm-channel-v2' : (isTimer ? 'timer-channel-v2' : 'default-channel-id');
-            const androidPriority = isAlarm ? 'high' : 'high';
+            const androidChannelId = (isAlarmTrigger || isReminderType) ? 'alarm-channel-v2' : (isTimer ? 'timer-channel-v2' : 'default-channel-id');
+            const androidPriority = 'high';
             const messages = tokens.map((tokenInfo) => {
                 const notificationTitle = payload.title || APP_NAME;
                 const imageUrl = payload.imageUrl || APP_LOGO_URL || undefined;
@@ -168,13 +162,13 @@ class PushNotificationService {
                         type: notificationData.type || notificationData.notificationType || 'notification',
                     },
                     android: {
-                        priority: isAlarm ? 'high' : androidPriority,
+                        priority: (isAlarmTrigger || isReminderType) ? 'high' : androidPriority,
                         notification: {
-                            sound: isAlarm ? 'alarm' : (payload.sound || 'default'),
+                            sound: isAlarmTrigger ? undefined : (isReminderType ? 'alarm' : (payload.sound || 'default')),
                             channelId: androidChannelId,
                             ...(imageUrl ? { imageUrl } : {}),
                             visibility: 'public',
-                            ...(isAlarm ? {
+                            ...(isReminderType && !isAlarmTrigger ? {
                                 defaultSound: true,
                                 defaultVibrateTimings: true,
                                 vibrateTimingsMillis: [0, 1000, 500, 1000, 500, 1000],
@@ -185,9 +179,9 @@ class PushNotificationService {
                     apns: {
                         payload: {
                             aps: {
-                                sound: payload.sound || 'default',
+                                sound: isAlarmTrigger ? undefined : (isReminderType ? 'alarm' : (payload.sound || 'default')),
                                 badge: payload.badge,
-                                ...(isAlarm ? {
+                                ...((isAlarmTrigger || isReminderType) ? {
                                     'content-available': 1,
                                     'mutable-content': 1,
                                 } : {}),

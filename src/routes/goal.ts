@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import Joi from 'joi';
-import { getPrismaClient } from '../utils/database';
+import { getPrismaClient, executeWithRetry } from '../utils/database';
 import { authenticateToken } from '../middleware/auth';
 import { AuthenticatedRequest, ValidationError, NotFoundError } from '../types';
 import { logger } from '../utils/logger';
@@ -55,23 +55,25 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
       where.status = status;
     }
 
-    const [goals, total] = await Promise.all([
-      prisma.goal.findMany({
-        where,
-        include: {
-          milestones: {
-            orderBy: { createdAt: 'asc' },
+    const [goals, total] = await executeWithRetry(async () => {
+      return await Promise.all([
+        prisma.goal.findMany({
+          where,
+          include: {
+            milestones: {
+              orderBy: { createdAt: 'asc' },
+            },
+            _count: {
+              select: { milestones: true, tasks: true },
+            },
           },
-          _count: {
-            select: { milestones: true, tasks: true },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
-      }),
-      prisma.goal.count({ where }),
-    ]);
+          orderBy: { createdAt: 'desc' },
+          skip: (Number(page) - 1) * Number(limit),
+          take: Number(limit),
+        }),
+        prisma.goal.count({ where }),
+      ]);
+    });
 
     // Calculate progress for each goal and check for overdue milestones
     const goalsWithProgress = await Promise.all(goals.map(async (goal: any) => {
@@ -86,9 +88,11 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
 
       // Update goal progress in database if it's different
       if (calculatedProgress !== (goal.progress || 0)) {
-        await prisma.goal.update({
-          where: { id: goal.id },
-          data: { progress: calculatedProgress },
+        await executeWithRetry(async () => {
+          return await prisma.goal.update({
+            where: { id: goal.id },
+            data: { progress: calculatedProgress },
+          });
         });
       }
 
@@ -131,30 +135,32 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.user!.id;
     const prisma = getPrismaClient();
 
-    const goal = await prisma.goal.findFirst({
-      where: {
-        id,
-        userId,
-      },
-      include: {
-        milestones: {
-          orderBy: { createdAt: 'asc' },
+    const goal = await executeWithRetry(async () => {
+      return await prisma.goal.findFirst({
+        where: {
+          id,
+          userId,
         },
-        tasks: {
-          include: {
-            creator: {
-              select: { id: true, name: true, email: true },
-            },
-            assignee: {
-              select: { id: true, name: true, email: true },
-            },
+        include: {
+          milestones: {
+            orderBy: { createdAt: 'asc' },
           },
-          orderBy: { createdAt: 'desc' },
+          tasks: {
+            include: {
+              creator: {
+                select: { id: true, name: true, email: true },
+              },
+              assignee: {
+                select: { id: true, name: true, email: true },
+              },
+            },
+            orderBy: { createdAt: 'desc' },
+          },
+          _count: {
+            select: { milestones: true, tasks: true },
+          },
         },
-        _count: {
-          select: { milestones: true, tasks: true },
-        },
-      },
+      });
     });
 
     if (!goal) {
@@ -175,9 +181,11 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
 
     // Update goal progress in database if it's different
     if (calculatedProgress !== (goal.progress || 0)) {
-      await prisma.goal.update({
-        where: { id: goal.id },
-        data: { progress: calculatedProgress },
+      await executeWithRetry(async () => {
+        return await prisma.goal.update({
+          where: { id: goal.id },
+          data: { progress: calculatedProgress },
+        });
       });
       // Update the goal object with new progress
       goal.progress = calculatedProgress;
@@ -227,14 +235,16 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
       userId,
     };
 
-    const goal = await prisma.goal.create({
-      data: goalData,
-      include: {
-        milestones: true,
-        _count: {
-          select: { milestones: true, tasks: true },
+    const goal = await executeWithRetry(async () => {
+      return await prisma.goal.create({
+        data: goalData,
+        include: {
+          milestones: true,
+          _count: {
+            select: { milestones: true, tasks: true },
+          },
         },
-      },
+      });
     });
 
     // Schedule notifications for target date if provided
@@ -269,25 +279,29 @@ router.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.user!.id;
     const prisma = getPrismaClient();
 
-    const goal = await prisma.goal.findFirst({
-      where: { id, userId },
+    const goal = await executeWithRetry(async () => {
+      return await prisma.goal.findFirst({
+        where: { id, userId },
+      });
     });
 
     if (!goal) {
       throw new NotFoundError('Goal');
     }
 
-    const updatedGoal = await prisma.goal.update({
-      where: { id },
-      data: value,
-      include: {
-        milestones: {
-          orderBy: { createdAt: 'asc' },
+    const updatedGoal = await executeWithRetry(async () => {
+      return await prisma.goal.update({
+        where: { id },
+        data: value,
+        include: {
+          milestones: {
+            orderBy: { createdAt: 'asc' },
+          },
+          _count: {
+            select: { milestones: true, tasks: true },
+          },
         },
-        _count: {
-          select: { milestones: true, tasks: true },
-        },
-      },
+      });
     });
 
     // Reschedule notifications if target date changed
@@ -317,16 +331,20 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.user!.id;
     const prisma = getPrismaClient();
 
-    const goal = await prisma.goal.findFirst({
-      where: { id, userId },
+    const goal = await executeWithRetry(async () => {
+      return await prisma.goal.findFirst({
+        where: { id, userId },
+      });
     });
 
     if (!goal) {
       throw new NotFoundError('Goal');
     }
 
-    await prisma.goal.delete({
-      where: { id },
+    await executeWithRetry(async () => {
+      return await prisma.goal.delete({
+        where: { id },
+      });
     });
 
     logger.info('Goal deleted successfully', { goalId: id, userId });
@@ -347,28 +365,34 @@ router.post('/:id/milestones/:milestoneId/complete', async (req: AuthenticatedRe
     // No body parameters needed for completion
     const userId = req.user!.id;
     const prisma = getPrismaClient();
-    const goal = await prisma.goal.findFirst({
-      where: { id, userId },
+    const goal = await executeWithRetry(async () => {
+      return await prisma.goal.findFirst({
+        where: { id, userId },
+      });
     });
 
     if (!goal) {
       throw new NotFoundError('Goal');
     }
 
-    const milestone = await prisma.milestone.update({
-      where: { id: milestoneId },
-      data: {
-        status: 'DONE',
-        completedAt: new Date(),
-      },
+    const milestone = await executeWithRetry(async () => {
+      return await prisma.milestone.update({
+        where: { id: milestoneId },
+        data: {
+          status: 'DONE',
+          completedAt: new Date(),
+        },
+      });
     });
 
     // Recalculate goal progress based on completed milestones
-    const goalWithMilestones = await prisma.goal.findFirst({
-      where: { id, userId },
-      include: {
-        milestones: true,
-      },
+    const goalWithMilestones = await executeWithRetry(async () => {
+      return await prisma.goal.findFirst({
+        where: { id, userId },
+        include: {
+          milestones: true,
+        },
+      });
     });
 
     if (goalWithMilestones) {
@@ -379,9 +403,11 @@ router.post('/:id/milestones/:milestoneId/complete', async (req: AuthenticatedRe
         : goalWithMilestones.progress;
 
       // Update goal progress
-      await prisma.goal.update({
-        where: { id: goalWithMilestones.id },
-        data: { progress: newProgress },
+      await executeWithRetry(async () => {
+        return await prisma.goal.update({
+          where: { id: goalWithMilestones.id },
+          data: { progress: newProgress },
+        });
       });
     }
 
@@ -410,23 +436,27 @@ router.post('/:id/milestones', async (req: AuthenticatedRequest, res: Response) 
     const userId = req.user!.id;
     const prisma = getPrismaClient();
 
-    const goal = await prisma.goal.findFirst({
-      where: { id, userId },
+    const goal = await executeWithRetry(async () => {
+      return await prisma.goal.findFirst({
+        where: { id, userId },
+      });
     });
 
     if (!goal) {
       throw new NotFoundError('Goal');
     }
 
-    const milestone = await prisma.milestone.create({
-      data: {
-        goalId: id,
-        title,
-        // description,
-        dueDate: dueDate ? new Date(dueDate) : null,
-        weight: weight || 0,
-        status: 'TODO',
-      },
+    const milestone = await executeWithRetry(async () => {
+      return await prisma.milestone.create({
+        data: {
+          goalId: id,
+          title,
+          // description,
+          dueDate: dueDate ? new Date(dueDate) : null,
+          weight: weight || 0,
+          status: 'TODO',
+        },
+      });
     });
 
     // Schedule notifications for milestone due date if provided
@@ -462,24 +492,28 @@ router.put('/:id/milestones/:milestoneId', async (req: AuthenticatedRequest, res
     const userId = req.user!.id;
     const prisma = getPrismaClient();
 
-    const goal = await prisma.goal.findFirst({
-      where: { id, userId },
+    const goal = await executeWithRetry(async () => {
+      return await prisma.goal.findFirst({
+        where: { id, userId },
+      });
     });
 
     if (!goal) {
       throw new NotFoundError('Goal');
     }
 
-    const milestone = await prisma.milestone.update({
-      where: { id: milestoneId },
-      data: {
-        title,
-        description,
-        dueDate: dueDate ? new Date(dueDate) : null,
-        weight,
-        status,
-        completedAt: completedAt ? new Date(completedAt) : null,
-      },
+    const milestone = await executeWithRetry(async () => {
+      return await prisma.milestone.update({
+        where: { id: milestoneId },
+        data: {
+          title,
+          description,
+          dueDate: dueDate ? new Date(dueDate) : null,
+          weight,
+          status,
+          completedAt: completedAt ? new Date(completedAt) : null,
+        },
+      });
     });
 
     // Reschedule notifications if due date changed
@@ -515,16 +549,20 @@ router.delete('/:id/milestones/:milestoneId', async (req: AuthenticatedRequest, 
     const userId = req.user!.id;
     const prisma = getPrismaClient();
 
-    const goal = await prisma.goal.findFirst({
-      where: { id, userId },
+    const goal = await executeWithRetry(async () => {
+      return await prisma.goal.findFirst({
+        where: { id, userId },
+      });
     });
 
     if (!goal) {
       throw new NotFoundError('Goal');
     }
 
-    await prisma.milestone.delete({
-      where: { id: milestoneId },
+    await executeWithRetry(async () => {
+      return await prisma.milestone.delete({
+        where: { id: milestoneId },
+      });
     });
 
     logger.info('Milestone deleted successfully', { goalId: id, milestoneId, userId });

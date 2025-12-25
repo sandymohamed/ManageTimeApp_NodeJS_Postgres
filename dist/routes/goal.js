@@ -82,23 +82,25 @@ router.get('/', async (req, res) => {
         if (status) {
             where.status = status;
         }
-        const [goals, total] = await Promise.all([
-            prisma.goal.findMany({
-                where,
-                include: {
-                    milestones: {
-                        orderBy: { createdAt: 'asc' },
+        const [goals, total] = await (0, database_1.executeWithRetry)(async () => {
+            return await Promise.all([
+                prisma.goal.findMany({
+                    where,
+                    include: {
+                        milestones: {
+                            orderBy: { createdAt: 'asc' },
+                        },
+                        _count: {
+                            select: { milestones: true, tasks: true },
+                        },
                     },
-                    _count: {
-                        select: { milestones: true, tasks: true },
-                    },
-                },
-                orderBy: { createdAt: 'desc' },
-                skip: (Number(page) - 1) * Number(limit),
-                take: Number(limit),
-            }),
-            prisma.goal.count({ where }),
-        ]);
+                    orderBy: { createdAt: 'desc' },
+                    skip: (Number(page) - 1) * Number(limit),
+                    take: Number(limit),
+                }),
+                prisma.goal.count({ where }),
+            ]);
+        });
         const goalsWithProgress = await Promise.all(goals.map(async (goal) => {
             const totalMilestones = goal.milestones.length;
             const completedMilestones = goal.milestones.filter((m) => m.status && (m.status.toUpperCase() === 'DONE' || m.status === 'DONE')).length;
@@ -106,9 +108,11 @@ router.get('/', async (req, res) => {
                 ? Math.round((completedMilestones / totalMilestones) * 100)
                 : (goal.progress || 0);
             if (calculatedProgress !== (goal.progress || 0)) {
-                await prisma.goal.update({
-                    where: { id: goal.id },
-                    data: { progress: calculatedProgress },
+                await (0, database_1.executeWithRetry)(async () => {
+                    return await prisma.goal.update({
+                        where: { id: goal.id },
+                        data: { progress: calculatedProgress },
+                    });
                 });
             }
             return {
@@ -143,30 +147,32 @@ router.get('/:id', async (req, res) => {
         const { id } = req.params;
         const userId = req.user.id;
         const prisma = (0, database_1.getPrismaClient)();
-        const goal = await prisma.goal.findFirst({
-            where: {
-                id,
-                userId,
-            },
-            include: {
-                milestones: {
-                    orderBy: { createdAt: 'asc' },
+        const goal = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.goal.findFirst({
+                where: {
+                    id,
+                    userId,
                 },
-                tasks: {
-                    include: {
-                        creator: {
-                            select: { id: true, name: true, email: true },
-                        },
-                        assignee: {
-                            select: { id: true, name: true, email: true },
-                        },
+                include: {
+                    milestones: {
+                        orderBy: { createdAt: 'asc' },
                     },
-                    orderBy: { createdAt: 'desc' },
+                    tasks: {
+                        include: {
+                            creator: {
+                                select: { id: true, name: true, email: true },
+                            },
+                            assignee: {
+                                select: { id: true, name: true, email: true },
+                            },
+                        },
+                        orderBy: { createdAt: 'desc' },
+                    },
+                    _count: {
+                        select: { milestones: true, tasks: true },
+                    },
                 },
-                _count: {
-                    select: { milestones: true, tasks: true },
-                },
-            },
+            });
         });
         if (!goal) {
             throw new types_1.NotFoundError('Goal');
@@ -178,9 +184,11 @@ router.get('/:id', async (req, res) => {
             : (goal.progress || 0);
         logger_1.logger.info(`Goal ${goal.id} progress calculation: ${completedMilestones}/${totalMilestones} = ${calculatedProgress}%`);
         if (calculatedProgress !== (goal.progress || 0)) {
-            await prisma.goal.update({
-                where: { id: goal.id },
-                data: { progress: calculatedProgress },
+            await (0, database_1.executeWithRetry)(async () => {
+                return await prisma.goal.update({
+                    where: { id: goal.id },
+                    data: { progress: calculatedProgress },
+                });
             });
             goal.progress = calculatedProgress;
         }
@@ -217,14 +225,16 @@ router.post('/', async (req, res) => {
             status: value.status || 'ACTIVE',
             userId,
         };
-        const goal = await prisma.goal.create({
-            data: goalData,
-            include: {
-                milestones: true,
-                _count: {
-                    select: { milestones: true, tasks: true },
+        const goal = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.goal.create({
+                data: goalData,
+                include: {
+                    milestones: true,
+                    _count: {
+                        select: { milestones: true, tasks: true },
+                    },
                 },
-            },
+            });
         });
         if (goal.targetDate) {
             const { scheduleGoalTargetDateNotifications } = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
@@ -252,23 +262,27 @@ router.put('/:id', async (req, res) => {
         }
         const userId = req.user.id;
         const prisma = (0, database_1.getPrismaClient)();
-        const goal = await prisma.goal.findFirst({
-            where: { id, userId },
+        const goal = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.goal.findFirst({
+                where: { id, userId },
+            });
         });
         if (!goal) {
             throw new types_1.NotFoundError('Goal');
         }
-        const updatedGoal = await prisma.goal.update({
-            where: { id },
-            data: value,
-            include: {
-                milestones: {
-                    orderBy: { createdAt: 'asc' },
+        const updatedGoal = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.goal.update({
+                where: { id },
+                data: value,
+                include: {
+                    milestones: {
+                        orderBy: { createdAt: 'asc' },
+                    },
+                    _count: {
+                        select: { milestones: true, tasks: true },
+                    },
                 },
-                _count: {
-                    select: { milestones: true, tasks: true },
-                },
-            },
+            });
         });
         if (value.targetDate !== undefined && updatedGoal.targetDate) {
             const { scheduleGoalTargetDateNotifications } = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
@@ -292,14 +306,18 @@ router.delete('/:id', async (req, res) => {
         const { id } = req.params;
         const userId = req.user.id;
         const prisma = (0, database_1.getPrismaClient)();
-        const goal = await prisma.goal.findFirst({
-            where: { id, userId },
+        const goal = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.goal.findFirst({
+                where: { id, userId },
+            });
         });
         if (!goal) {
             throw new types_1.NotFoundError('Goal');
         }
-        await prisma.goal.delete({
-            where: { id },
+        await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.goal.delete({
+                where: { id },
+            });
         });
         logger_1.logger.info('Goal deleted successfully', { goalId: id, userId });
         res.json({
@@ -317,24 +335,30 @@ router.post('/:id/milestones/:milestoneId/complete', async (req, res) => {
         const { id, milestoneId } = req.params;
         const userId = req.user.id;
         const prisma = (0, database_1.getPrismaClient)();
-        const goal = await prisma.goal.findFirst({
-            where: { id, userId },
+        const goal = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.goal.findFirst({
+                where: { id, userId },
+            });
         });
         if (!goal) {
             throw new types_1.NotFoundError('Goal');
         }
-        const milestone = await prisma.milestone.update({
-            where: { id: milestoneId },
-            data: {
-                status: 'DONE',
-                completedAt: new Date(),
-            },
+        const milestone = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.milestone.update({
+                where: { id: milestoneId },
+                data: {
+                    status: 'DONE',
+                    completedAt: new Date(),
+                },
+            });
         });
-        const goalWithMilestones = await prisma.goal.findFirst({
-            where: { id, userId },
-            include: {
-                milestones: true,
-            },
+        const goalWithMilestones = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.goal.findFirst({
+                where: { id, userId },
+                include: {
+                    milestones: true,
+                },
+            });
         });
         if (goalWithMilestones) {
             const totalMilestones = goalWithMilestones.milestones.length;
@@ -342,9 +366,11 @@ router.post('/:id/milestones/:milestoneId/complete', async (req, res) => {
             const newProgress = totalMilestones > 0
                 ? Math.round((completedMilestones / totalMilestones) * 100)
                 : goalWithMilestones.progress;
-            await prisma.goal.update({
-                where: { id: goalWithMilestones.id },
-                data: { progress: newProgress },
+            await (0, database_1.executeWithRetry)(async () => {
+                return await prisma.goal.update({
+                    where: { id: goalWithMilestones.id },
+                    data: { progress: newProgress },
+                });
             });
         }
         const milestoneResponse = {
@@ -368,20 +394,24 @@ router.post('/:id/milestones', async (req, res) => {
         const { title, dueDate, weight } = req.body;
         const userId = req.user.id;
         const prisma = (0, database_1.getPrismaClient)();
-        const goal = await prisma.goal.findFirst({
-            where: { id, userId },
+        const goal = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.goal.findFirst({
+                where: { id, userId },
+            });
         });
         if (!goal) {
             throw new types_1.NotFoundError('Goal');
         }
-        const milestone = await prisma.milestone.create({
-            data: {
-                goalId: id,
-                title,
-                dueDate: dueDate ? new Date(dueDate) : null,
-                weight: weight || 0,
-                status: 'TODO',
-            },
+        const milestone = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.milestone.create({
+                data: {
+                    goalId: id,
+                    title,
+                    dueDate: dueDate ? new Date(dueDate) : null,
+                    weight: weight || 0,
+                    status: 'TODO',
+                },
+            });
         });
         if (milestone.dueDate) {
             const { scheduleMilestoneDueDateNotifications } = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
@@ -409,22 +439,26 @@ router.put('/:id/milestones/:milestoneId', async (req, res) => {
         const { title, description, dueDate, weight, status, completedAt } = req.body;
         const userId = req.user.id;
         const prisma = (0, database_1.getPrismaClient)();
-        const goal = await prisma.goal.findFirst({
-            where: { id, userId },
+        const goal = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.goal.findFirst({
+                where: { id, userId },
+            });
         });
         if (!goal) {
             throw new types_1.NotFoundError('Goal');
         }
-        const milestone = await prisma.milestone.update({
-            where: { id: milestoneId },
-            data: {
-                title,
-                description,
-                dueDate: dueDate ? new Date(dueDate) : null,
-                weight,
-                status,
-                completedAt: completedAt ? new Date(completedAt) : null,
-            },
+        const milestone = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.milestone.update({
+                where: { id: milestoneId },
+                data: {
+                    title,
+                    description,
+                    dueDate: dueDate ? new Date(dueDate) : null,
+                    weight,
+                    status,
+                    completedAt: completedAt ? new Date(completedAt) : null,
+                },
+            });
         });
         if (dueDate !== undefined && milestone.dueDate) {
             const { scheduleMilestoneDueDateNotifications } = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
@@ -452,14 +486,18 @@ router.delete('/:id/milestones/:milestoneId', async (req, res) => {
         const { id, milestoneId } = req.params;
         const userId = req.user.id;
         const prisma = (0, database_1.getPrismaClient)();
-        const goal = await prisma.goal.findFirst({
-            where: { id, userId },
+        const goal = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.goal.findFirst({
+                where: { id, userId },
+            });
         });
         if (!goal) {
             throw new types_1.NotFoundError('Goal');
         }
-        await prisma.milestone.delete({
-            where: { id: milestoneId },
+        await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.milestone.delete({
+                where: { id: milestoneId },
+            });
         });
         logger_1.logger.info('Milestone deleted successfully', { goalId: id, milestoneId, userId });
         res.json({

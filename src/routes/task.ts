@@ -576,7 +576,7 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
 
     logger.info('Task deleted successfully', { taskId: id, userId });
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Task deleted successfully',
     });

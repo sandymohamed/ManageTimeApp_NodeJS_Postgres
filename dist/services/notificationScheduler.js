@@ -852,9 +852,10 @@ async function scheduleRoutineTaskNotifications(routineId, userId, routineTitle,
                         let alarmMinutes = routineMinutes;
                         if (unit === 'h') {
                             alarmHours = routineHours - value;
-                            if (alarmHours < 0) {
+                            while (alarmHours < 0) {
                                 alarmHours += 24;
                             }
+                            alarmHours = alarmHours % 24;
                         }
                         else if (unit === 'd') {
                             alarmHours = routineHours;
@@ -865,7 +866,7 @@ async function scheduleRoutineTaskNotifications(routineId, userId, routineTitle,
                             alarmMinutes = routineMinutes;
                         }
                         alarmTimeForReminder = `${String(alarmHours).padStart(2, '0')}:${String(alarmMinutes).padStart(2, '0')}`;
-                        logger_1.logger.info(`Calculated alarm time from reminderBefore: routine ${schedule.time}, reminderBefore ${reminderBefore}, alarm time ${alarmTimeForReminder}`);
+                        logger_1.logger.info(`Calculated alarm time from reminderBefore: routine ${schedule.time}, reminderBefore ${reminderBefore}, value=${value}, unit=${unit}, routineHours=${routineHours}, alarmHours=${alarmHours}, alarm time ${alarmTimeForReminder}`);
                     }
                     else {
                         alarmTimeForReminder = reminderTime || schedule.time || '00:00';
@@ -1154,6 +1155,7 @@ async function createAlarmForRoutineReminder(routineId, taskId, userId, routineT
         }
         const alarmTime = new Date(nextOccurrence);
         alarmTime.setHours(alarmHours, alarmMinutes, 0, 0);
+        logger_1.logger.info(`Initial alarm time calculation: reminderTime=${reminderTime}, alarmHours=${alarmHours}, alarmMinutes=${alarmMinutes}, nextOccurrence=${nextOccurrence.toISOString()}, alarmTime=${alarmTime.toISOString()}`);
         if (reminderBefore) {
             const match = reminderBefore.match(/^(\d+)([hdw])$/);
             if (match) {
@@ -1169,8 +1171,10 @@ async function createAlarmForRoutineReminder(routineId, taskId, userId, routineT
                     const routineTimeOnSameDay = new Date(nextOccurrence);
                     const [routineH, routineM] = (schedule.time || '00:00').split(':').map(Number);
                     routineTimeOnSameDay.setHours(routineH, routineM, 0, 0);
-                    if (alarmTime.getTime() < routineTimeOnSameDay.getTime()) {
+                    if (alarmTime.getHours() < routineH ||
+                        (alarmTime.getHours() === routineH && alarmTime.getMinutes() < routineM)) {
                         alarmTime.setDate(alarmTime.getDate() - 1);
+                        logger_1.logger.info(`Adjusted alarm date backward: alarm time ${alarmTime.getHours()}:${alarmTime.getMinutes()} is before routine time ${routineH}:${routineM}`);
                     }
                 }
             }
@@ -1212,6 +1216,10 @@ async function createAlarmForRoutineReminder(routineId, taskId, userId, routineT
                 routineId,
                 taskId,
                 alarmTime: alarmTime.toISOString(),
+                alarmTimeLocal: `${alarmTime.getHours()}:${String(alarmTime.getMinutes()).padStart(2, '0')}`,
+                reminderBefore,
+                reminderTime,
+                scheduleTime: schedule.time,
             });
         }
         catch (createError) {
@@ -1225,25 +1233,14 @@ async function createAlarmForRoutineReminder(routineId, taskId, userId, routineT
             });
             throw createError;
         }
+        logger_1.logger.debug('Routine alarm created - native alarms will handle ringing', { alarmId: alarm.id });
         try {
-            await scheduleAlarmPushNotification({
-                id: alarm.id,
-                userId: alarm.userId,
-                title: alarm.title,
-                time: alarm.time,
-                timezone: alarm.timezone || 'UTC',
-                recurrenceRule: alarm.recurrenceRule,
-                enabled: alarm.enabled,
-            });
-            logger_1.logger.info(`Push notification scheduled for alarm`, {
-                alarmId: alarm.id,
-            });
+            await cancelAlarmPushNotifications(alarm.id, userId);
         }
-        catch (scheduleError) {
-            logger_1.logger.error(`Failed to schedule push notification for alarm, but alarm was created:`, {
-                error: scheduleError,
+        catch (cancelError) {
+            logger_1.logger.warn(`Failed to cancel existing backend push notifications for routine alarm:`, {
+                error: cancelError,
                 alarmId: alarm.id,
-                errorMessage: scheduleError?.message,
             });
         }
         try {

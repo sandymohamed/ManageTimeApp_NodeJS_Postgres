@@ -71,6 +71,7 @@ const updateTaskSchema = joi_1.default.object({
     dueTime: joi_1.default.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).allow(null).optional(),
     recurrenceRule: joi_1.default.string().allow(null).optional(),
     metadata: joi_1.default.object().optional(),
+    tags: joi_1.default.array().items(joi_1.default.string()).optional(),
 });
 const reorderTasksSchema = joi_1.default.object({
     taskOrders: joi_1.default.array().items(joi_1.default.object({
@@ -373,9 +374,10 @@ router.put('/:id', async (req, res) => {
         if (!existingTask) {
             throw new types_1.NotFoundError('Task');
         }
+        const { tags, ...updateData } = value;
         const task = await prisma.task.update({
             where: { id },
-            data: value,
+            data: updateData,
             include: {
                 creator: {
                     select: { id: true, name: true, email: true },
@@ -431,6 +433,25 @@ router.delete('/:id', async (req, res) => {
         const { id } = req.params;
         const userId = req.user.id;
         const prisma = (0, database_1.getPrismaClient)();
+        if (id.startsWith('routine_')) {
+            let routineTaskId = id.replace('routine_', '');
+            if (routineTaskId.includes('_day_')) {
+                routineTaskId = routineTaskId.split('_day_')[0];
+            }
+            else if (routineTaskId.match(/_\d{4}-\d{2}-\d{2}$/)) {
+                routineTaskId = routineTaskId.replace(/_\d{4}-\d{2}-\d{2}$/, '');
+            }
+            const { routineService } = await Promise.resolve().then(() => __importStar(require('../services/routineService')));
+            const { cancelRoutineTaskNotifications } = await Promise.resolve().then(() => __importStar(require('../services/notificationScheduler')));
+            await routineService.deleteRoutineTask(routineTaskId, userId);
+            cancelRoutineTaskNotifications(routineTaskId, userId)
+                .catch(err => logger_1.logger.error('Failed to cancel routine task notification:', err));
+            logger_1.logger.info('Routine task deleted successfully', { taskId: id, routineTaskId, userId });
+            return res.json({
+                success: true,
+                message: 'Task deleted successfully',
+            });
+        }
         const task = await prisma.task.findFirst({
             where: {
                 id,
@@ -441,13 +462,13 @@ router.delete('/:id', async (req, res) => {
             },
         });
         if (!task) {
-            throw new types_1.NotFoundError('Task');
+            throw new types_1.NotFoundError('Task not found');
         }
         await prisma.task.delete({
             where: { id },
         });
         logger_1.logger.info('Task deleted successfully', { taskId: id, userId });
-        res.json({
+        return res.json({
             success: true,
             message: 'Task deleted successfully',
         });

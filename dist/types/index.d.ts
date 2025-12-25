@@ -91,6 +91,7 @@ export interface PlanGenerationRequest {
 export interface GeneratedMilestone {
     title: string;
     durationDays: number;
+    targetDate?: string;
     description?: string;
     tasks: string[];
 }

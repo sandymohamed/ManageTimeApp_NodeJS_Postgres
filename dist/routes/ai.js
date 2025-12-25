@@ -54,6 +54,24 @@ const generatePlanSchema = joi_1.default.object({
         tone: joi_1.default.string().valid('supportive', 'professional', 'casual').optional(),
     }).optional(),
 });
+const calculateMilestoneDate = (now, goalTargetDate, cumulativeDays, totalDuration, goalHasTargetDate) => {
+    let milestoneDueDate;
+    if (goalHasTargetDate && goalTargetDate) {
+        const progressRatio = cumulativeDays / totalDuration;
+        const totalDaysAvailable = Math.ceil((goalTargetDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        const daysFromStart = Math.floor(totalDaysAvailable * progressRatio);
+        milestoneDueDate = new Date(now);
+        milestoneDueDate.setDate(now.getDate() + daysFromStart);
+        if (milestoneDueDate > goalTargetDate) {
+            milestoneDueDate = new Date(goalTargetDate);
+        }
+    }
+    else {
+        milestoneDueDate = new Date(now);
+        milestoneDueDate.setDate(now.getDate() + cumulativeDays);
+    }
+    return milestoneDueDate;
+};
 router.post('/generate-plan', async (req, res) => {
     try {
         const { error, value } = generatePlanSchema.validate(req.body);
@@ -89,19 +107,22 @@ router.post('/generate-plan', async (req, res) => {
         for (const milestoneData of plan.milestones) {
             cumulativeDays += milestoneData.durationDays;
             let milestoneDueDate;
-            if (goal.targetDate && goalTargetDate) {
-                const progressRatio = cumulativeDays / totalDuration;
-                const totalDaysAvailable = Math.ceil((goalTargetDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-                const daysFromStart = Math.floor(totalDaysAvailable * progressRatio);
-                milestoneDueDate = new Date(now);
-                milestoneDueDate.setDate(now.getDate() + daysFromStart);
-                if (milestoneDueDate > goalTargetDate) {
-                    milestoneDueDate = new Date(goalTargetDate);
+            if (milestoneData.targetDate) {
+                milestoneDueDate = new Date(milestoneData.targetDate);
+                if (isNaN(milestoneDueDate.getTime())) {
+                    milestoneDueDate = calculateMilestoneDate(now, goalTargetDate, cumulativeDays, totalDuration, goal.targetDate);
+                }
+                else {
+                    if (goal.targetDate && goalTargetDate && milestoneDueDate > goalTargetDate) {
+                        milestoneDueDate = new Date(goalTargetDate);
+                    }
+                    if (milestoneDueDate < now) {
+                        milestoneDueDate = new Date(now);
+                    }
                 }
             }
             else {
-                milestoneDueDate = new Date(now);
-                milestoneDueDate.setDate(now.getDate() + cumulativeDays);
+                milestoneDueDate = calculateMilestoneDate(now, goalTargetDate, cumulativeDays, totalDuration, goal.targetDate);
             }
             const milestone = await prisma.milestone.create({
                 data: {
@@ -194,7 +215,13 @@ router.post('/generate-plan', async (req, res) => {
     }
     catch (error) {
         logger_1.logger.error('AI plan generation error:', error);
-        throw error;
+        const errorMessage = error instanceof Error ? error.message : 'Failed to generate AI plan';
+        const statusCode = error instanceof types_1.ValidationError ? 400 : 500;
+        return res.status(statusCode).json({
+            success: false,
+            error: errorMessage,
+            message: 'Failed to generate plan. Please try again or contact support if the issue persists.',
+        });
     }
 });
 router.post('/generate-simple-plan', async (req, res) => {
@@ -212,7 +239,13 @@ router.post('/generate-simple-plan', async (req, res) => {
     }
     catch (error) {
         logger_1.logger.error('Simple plan generation error:', error);
-        throw error;
+        const errorMessage = error instanceof Error ? error.message : 'Failed to generate AI plan';
+        const statusCode = error instanceof types_1.ValidationError ? 400 : 500;
+        return res.status(statusCode).json({
+            success: false,
+            error: errorMessage,
+            message: 'Failed to generate simple plan. Please try again or contact support if the issue persists.',
+        });
     }
 });
 exports.default = router;
