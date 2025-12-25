@@ -4,9 +4,9 @@
   "description": "Backend API for Manage Time App",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "node src/index.ts",
+    "dev": "ts-node --transpile-only src/index.ts",
     "build": "tsc",
-    "start": "node src/index.js",
+    "start": "npm run build && node dist/index.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
