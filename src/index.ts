@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import rateLimit from 'express-rate-limit';
+console.log(" APP STARTED");
 
 
 import { errorHandler } from './middleware/errorHandler';

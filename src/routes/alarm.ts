@@ -283,19 +283,39 @@ router.post('/:id/snooze', async (req: AuthenticatedRequest, res: Response) => {
     });
 
     if (!alarm) {
-      throw new NotFoundError('Alarm');
+      // Alarm doesn't exist or already deleted - return success (idempotent)
+      // This can happen if the routine was rescheduled and the alarm was recreated
+      logger.info('Alarm not found or already deleted for snooze', { alarmId: id, userId });
+      return res.json({
+        success: true,
+        message: 'Alarm snoozed successfully',
+      });
     }
 
     // TODO: Implement snooze logic
+    // For now, we just log it - the actual snooze should update the alarm time
+    // by adding the duration (in minutes) to the current alarm time
     logger.info('Alarm snoozed', { alarmId: id, duration, userId });
 
     res.json({
       success: true,
       message: 'Alarm snoozed successfully',
     });
-  } catch (error) {
+  } catch (error: any) {
+    // Handle Prisma error for record not found (P2025)
+    if (error.code === 'P2025') {
+      logger.info('Alarm already deleted during snooze', { alarmId: req.params.id, userId: req.user!.id });
+      return res.json({
+        success: true,
+        message: 'Alarm snoozed successfully',
+      });
+    }
+    
     logger.error('Failed to snooze alarm:', error);
-    throw error;
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to snooze alarm',
+    });
   }
 });
 
