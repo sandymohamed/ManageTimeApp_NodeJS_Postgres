@@ -60,12 +60,24 @@ async function scheduleTaskDueDateNotifications(taskId, userId, dueDate, taskTit
     try {
         logger_1.logger.info('scheduleTaskDueDateNotifications called', { taskId, userId, dueDate, dueTime });
         const prisma = (0, database_1.getPrismaClient)();
-        await prisma.reminder.deleteMany({
-            where: {
-                targetType: 'TASK',
-                targetId: taskId,
-                userId,
-            },
+        await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.reminder.deleteMany({
+                where: {
+                    targetType: 'TASK',
+                    targetId: taskId,
+                    userId,
+                },
+            });
+        });
+        await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.alarm.deleteMany({
+                where: {
+                    userId,
+                    linkedTaskId: taskId,
+                },
+            });
+        }).catch(err => {
+            logger_1.logger.warn(`Failed to delete existing alarms for task ${taskId}, continuing anyway:`, err);
         });
         const now = new Date();
         const dueDateTime = new Date(dueDate);
@@ -92,18 +104,20 @@ async function scheduleTaskDueDateNotifications(taskId, userId, dueDate, taskTit
         const reminders = [];
         if (oneDayBefore > now && oneDayBefore < dueDateTime) {
             try {
-                const reminder1 = await prisma.reminder.create({
-                    data: {
-                        userId,
-                        targetType: 'TASK',
-                        targetId: taskId,
-                        title: `Task Due Tomorrow: ${taskTitle}`,
-                        note: `Your task "${taskTitle}" is due tomorrow.`,
-                        triggerType: 'TIME',
-                        schedule: {
-                            at: oneDayBefore.toISOString(),
+                const reminder1 = await (0, database_1.executeWithRetry)(async () => {
+                    return await prisma.reminder.create({
+                        data: {
+                            userId,
+                            targetType: 'TASK',
+                            targetId: taskId,
+                            title: `Task Due Tomorrow: ${taskTitle}`,
+                            note: `Your task "${taskTitle}" is due tomorrow.`,
+                            triggerType: 'TIME',
+                            schedule: {
+                                at: oneDayBefore.toISOString(),
+                            },
                         },
-                    },
+                    });
                 });
                 reminders.push({ reminder: reminder1, time: oneDayBefore, type: 'DUE_DATE_REMINDER' });
                 logger_1.logger.info(`Created 1-day-before reminder for task ${taskId} at ${oneDayBefore.toISOString()}`);
@@ -114,18 +128,20 @@ async function scheduleTaskDueDateNotifications(taskId, userId, dueDate, taskTit
         }
         if (oneHourBefore > now && oneHourBefore < dueDateTime) {
             try {
-                const reminder2 = await prisma.reminder.create({
-                    data: {
-                        userId,
-                        targetType: 'TASK',
-                        targetId: taskId,
-                        title: `Task Due in 1 Hour: ${taskTitle}`,
-                        note: `Your task "${taskTitle}" is due in 1 hour.`,
-                        triggerType: 'TIME',
-                        schedule: {
-                            at: oneHourBefore.toISOString(),
+                const reminder2 = await (0, database_1.executeWithRetry)(async () => {
+                    return await prisma.reminder.create({
+                        data: {
+                            userId,
+                            targetType: 'TASK',
+                            targetId: taskId,
+                            title: `Task Due in 1 Hour: ${taskTitle}`,
+                            note: `Your task "${taskTitle}" is due in 1 hour.`,
+                            triggerType: 'TIME',
+                            schedule: {
+                                at: oneHourBefore.toISOString(),
+                            },
                         },
-                    },
+                    });
                 });
                 reminders.push({ reminder: reminder2, time: oneHourBefore, type: 'DUE_DATE_REMINDER' });
                 logger_1.logger.info(`Created 1-hour-before reminder for task ${taskId} at ${oneHourBefore.toISOString()}`);
@@ -135,21 +151,57 @@ async function scheduleTaskDueDateNotifications(taskId, userId, dueDate, taskTit
             }
         }
         try {
-            const reminder3 = await prisma.reminder.create({
-                data: {
-                    userId,
-                    targetType: 'TASK',
-                    targetId: taskId,
-                    title: `Task Due: ${taskTitle}`,
-                    note: `Your task "${taskTitle}" is due now.`,
-                    triggerType: 'TIME',
-                    schedule: {
-                        at: dueDateTime.toISOString(),
+            const reminder3 = await (0, database_1.executeWithRetry)(async () => {
+                return await prisma.reminder.create({
+                    data: {
+                        userId,
+                        targetType: 'TASK',
+                        targetId: taskId,
+                        title: `Task Due: ${taskTitle}`,
+                        note: `Your task "${taskTitle}" is due now.`,
+                        triggerType: 'TIME',
+                        schedule: {
+                            at: dueDateTime.toISOString(),
+                        },
                     },
-                },
+                });
             });
             reminders.push({ reminder: reminder3, time: dueDateTime, type: 'DUE_DATE_REMINDER' });
             logger_1.logger.info(`Created due-time reminder for task ${taskId} at ${dueDateTime.toISOString()}`);
+            try {
+                await (0, database_1.executeWithRetry)(async () => {
+                    return await prisma.alarm.deleteMany({
+                        where: {
+                            userId,
+                            linkedTaskId: taskId,
+                        },
+                    });
+                });
+                const user = await (0, database_1.executeWithRetry)(async () => {
+                    return await prisma.user.findUnique({
+                        where: { id: userId },
+                        select: { timezone: true },
+                    });
+                }).catch(() => null);
+                const userTimezone = user?.timezone || 'UTC';
+                await (0, database_1.executeWithRetry)(async () => {
+                    return await prisma.alarm.create({
+                        data: {
+                            userId,
+                            title: `Task Due: ${taskTitle}`,
+                            time: dueDateTime,
+                            timezone: userTimezone,
+                            linkedTaskId: taskId,
+                            enabled: true,
+                            recurrenceRule: null,
+                        },
+                    });
+                });
+                logger_1.logger.info(`Created alarm record for task ${taskId} at ${dueDateTime.toISOString()}`);
+            }
+            catch (alarmError) {
+                logger_1.logger.error(`Failed to create alarm record for task ${taskId}:`, alarmError);
+            }
         }
         catch (error) {
             logger_1.logger.error(`Failed to create due-time reminder for task ${taskId}:`, error);
@@ -162,7 +214,9 @@ async function scheduleTaskDueDateNotifications(taskId, userId, dueDate, taskTit
             }
             catch (error) {
                 logger_1.logger.error(`Failed to schedule reminder for task ${taskId}:`, error);
-                await prisma.reminder.delete({ where: { id: reminder.id } }).catch(() => { });
+                await (0, database_1.executeWithRetry)(async () => {
+                    return await prisma.reminder.delete({ where: { id: reminder.id } });
+                }).catch(() => { });
             }
         }
         if (reminders.length === 0) {
@@ -176,14 +230,16 @@ async function scheduleTaskDueDateNotifications(taskId, userId, dueDate, taskTit
 async function scheduleMilestoneDueDateNotifications(milestoneId, goalId, userId, dueDate, milestoneTitle) {
     try {
         const prisma = (0, database_1.getPrismaClient)();
-        await prisma.reminder.deleteMany({
-            where: {
-                targetType: 'GOAL',
-                userId,
-                note: {
-                    contains: milestoneTitle,
+        await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.reminder.deleteMany({
+                where: {
+                    targetType: 'GOAL',
+                    userId,
+                    note: {
+                        contains: milestoneTitle,
+                    },
                 },
-            },
+            });
         });
         const now = new Date();
         const dueDateTime = new Date(dueDate);
@@ -198,57 +254,78 @@ async function scheduleMilestoneDueDateNotifications(milestoneId, goalId, userId
         oneHourBefore.setHours(oneHourBefore.getHours() - 1);
         const reminders = [];
         if (oneDayBefore > now && oneDayBefore < dueDateTime) {
-            const reminder1 = await prisma.reminder.create({
-                data: {
-                    userId,
-                    targetType: 'GOAL',
-                    targetId: null,
-                    title: `Milestone Due Tomorrow: ${milestoneTitle}`,
-                    note: `Your milestone "${milestoneTitle}" is due tomorrow.`,
-                    triggerType: 'TIME',
-                    schedule: {
-                        at: oneDayBefore.toISOString(),
-                        milestoneId: milestoneId,
-                        goalId: goalId,
-                    },
-                },
-            });
-            reminders.push({ reminder: reminder1, time: oneDayBefore, type: 'GOAL_REMINDER' });
+            try {
+                const reminder1 = await (0, database_1.executeWithRetry)(async () => {
+                    return await prisma.reminder.create({
+                        data: {
+                            userId,
+                            targetType: 'GOAL',
+                            targetId: null,
+                            title: `Milestone Due Tomorrow: ${milestoneTitle}`,
+                            note: `Your milestone "${milestoneTitle}" is due tomorrow.`,
+                            triggerType: 'TIME',
+                            schedule: {
+                                at: oneDayBefore.toISOString(),
+                                milestoneId: milestoneId,
+                                goalId: goalId,
+                            },
+                        },
+                    });
+                });
+                reminders.push({ reminder: reminder1, time: oneDayBefore, type: 'GOAL_REMINDER' });
+            }
+            catch (error) {
+                logger_1.logger.error(`Failed to create 1-day-before reminder for milestone ${milestoneId}:`, error);
+            }
         }
         if (oneHourBefore > now && oneHourBefore < dueDateTime) {
-            const reminder2 = await prisma.reminder.create({
-                data: {
-                    userId,
-                    targetType: 'GOAL',
-                    targetId: null,
-                    title: `Milestone Due in 1 Hour: ${milestoneTitle}`,
-                    note: `Your milestone "${milestoneTitle}" is due in 1 hour.`,
-                    triggerType: 'TIME',
-                    schedule: {
-                        at: oneHourBefore.toISOString(),
-                        milestoneId: milestoneId,
-                        goalId: goalId,
-                    },
-                },
-            });
-            reminders.push({ reminder: reminder2, time: oneHourBefore, type: 'GOAL_REMINDER' });
+            try {
+                const reminder2 = await (0, database_1.executeWithRetry)(async () => {
+                    return await prisma.reminder.create({
+                        data: {
+                            userId,
+                            targetType: 'GOAL',
+                            targetId: null,
+                            title: `Milestone Due in 1 Hour: ${milestoneTitle}`,
+                            note: `Your milestone "${milestoneTitle}" is due in 1 hour.`,
+                            triggerType: 'TIME',
+                            schedule: {
+                                at: oneHourBefore.toISOString(),
+                                milestoneId: milestoneId,
+                                goalId: goalId,
+                            },
+                        },
+                    });
+                });
+                reminders.push({ reminder: reminder2, time: oneHourBefore, type: 'GOAL_REMINDER' });
+            }
+            catch (error) {
+                logger_1.logger.error(`Failed to create 1-hour-before reminder for milestone ${milestoneId}:`, error);
+            }
         }
-        const reminder3 = await prisma.reminder.create({
-            data: {
-                userId,
-                targetType: 'GOAL',
-                targetId: null,
-                title: `Milestone Due Now: ${milestoneTitle}`,
-                note: `Your milestone "${milestoneTitle}" is due now.`,
-                triggerType: 'TIME',
-                schedule: {
-                    at: dueDateTime.toISOString(),
-                    milestoneId: milestoneId,
-                    goalId: goalId,
-                },
-            },
-        });
-        reminders.push({ reminder: reminder3, time: dueDateTime, type: 'GOAL_REMINDER' });
+        try {
+            const reminder3 = await (0, database_1.executeWithRetry)(async () => {
+                return await prisma.reminder.create({
+                    data: {
+                        userId,
+                        targetType: 'GOAL',
+                        targetId: null,
+                        title: `Milestone Due Now: ${milestoneTitle}`,
+                        note: `Your milestone "${milestoneTitle}" is due now.`,
+                        triggerType: 'TIME',
+                        schedule: {
+                            at: dueDateTime.toISOString(),
+                            milestoneId: milestoneId,
+                            goalId: goalId,
+                        },
+                    },
+                });
+            });
+            reminders.push({ reminder: reminder3, time: dueDateTime, type: 'GOAL_REMINDER' });
+        }
+        catch (error) {
+            logger_1.logger.error(`Failed to create due-time reminder for milestone ${milestoneId}:`, error);
+        }
         for (const { reminder, time, type } of reminders) {
             try {
                 await (0, queueService_1.scheduleReminder)(reminder.id, userId, time, type);
@@ -256,7 +333,9 @@ async function scheduleMilestoneDueDateNotifications(milestoneId, goalId, userId
             }
             catch (error) {
                 logger_1.logger.error(`Failed to schedule reminder for milestone ${milestoneId}:`, error);
-                await prisma.reminder.delete({ where: { id: reminder.id } }).catch(() => { });
+                await (0, database_1.executeWithRetry)(async () => {
+                    return await prisma.reminder.delete({ where: { id: reminder.id } });
+                }).catch(() => { });
             }
         }
     }
@@ -268,29 +347,31 @@ async function checkAndNotifyOverdueMilestones() {
     try {
         const prisma = (0, database_1.getPrismaClient)();
         const now = new Date();
-        const overdueMilestones = await prisma.milestone.findMany({
-            where: {
-                dueDate: {
-                    lt: now,
-                },
-                status: {
-                    not: 'DONE',
-                },
-                goal: {
+        const overdueMilestones = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.milestone.findMany({
+                where: {
+                    dueDate: {
+                        lt: now,
+                    },
                     status: {
                         not: 'DONE',
                     },
-                },
-            },
-            include: {
-                goal: {
-                    select: {
-                        id: true,
-                        userId: true,
-                        title: true,
+                    goal: {
+                        status: {
+                            not: 'DONE',
+                        },
                     },
                 },
-            },
+                include: {
+                    goal: {
+                        select: {
+                            id: true,
+                            userId: true,
+                            title: true,
+                        },
+                    },
+                },
+            });
         });
         logger_1.logger.info(`Found ${overdueMilestones.length} overdue milestones`);
         for (const milestone of overdueMilestones) {
@@ -303,37 +384,41 @@ async function checkAndNotifyOverdueMilestones() {
             const goalId = goal.id;
             const todayStart = new Date(now);
             todayStart.setHours(0, 0, 0, 0);
-            const existingReminder = await prisma.reminder.findFirst({
-                where: {
-                    userId,
-                    targetType: 'GOAL',
-                    title: {
-                        contains: `Overdue Milestone: ${milestone.title}`,
+            const existingReminder = await (0, database_1.executeWithRetry)(async () => {
+                return await prisma.reminder.findFirst({
+                    where: {
+                        userId,
+                        targetType: 'GOAL',
+                        title: {
+                            contains: `Overdue Milestone: ${milestone.title}`,
+                        },
+                        createdAt: {
+                            gte: todayStart,
+                        },
                     },
-                    createdAt: {
-                        gte: todayStart,
-                    },
-                },
+                });
             });
             if (existingReminder) {
                 logger_1.logger.info(`Overdue notification already sent today for milestone ${milestone.id}`);
                 continue;
             }
             const daysOverdue = Math.floor((now.getTime() - milestone.dueDate.getTime()) / (1000 * 60 * 60 * 24));
-            const reminder = await prisma.reminder.create({
-                data: {
-                    userId,
-                    targetType: 'GOAL',
-                    targetId: null,
-                    title: `Overdue Milestone: ${milestone.title}`,
-                    note: `Your milestone "${milestone.title}" for goal "${goal.title}" is ${daysOverdue} day${daysOverdue !== 1 ? 's' : ''} overdue.`,
-                    triggerType: 'TIME',
-                    schedule: {
-                        at: now.toISOString(),
-                        milestoneId: milestone.id,
-                        goalId: goalId,
+            const reminder = await (0, database_1.executeWithRetry)(async () => {
+                return await prisma.reminder.create({
+                    data: {
+                        userId,
+                        targetType: 'GOAL',
+                        targetId: null,
+                        title: `Overdue Milestone: ${milestone.title}`,
+                        note: `Your milestone "${milestone.title}" for goal "${goal.title}" is ${daysOverdue} day${daysOverdue !== 1 ? 's' : ''} overdue.`,
+                        triggerType: 'TIME',
+                        schedule: {
+                            at: now.toISOString(),
+                            milestoneId: milestone.id,
+                            goalId: goalId,
+                        },
                     },
-                },
+                });
             });
             try {
                 const immediateTime = new Date(Date.now() + 1000);
@@ -342,7 +427,9 @@ async function checkAndNotifyOverdueMilestones() {
             }
             catch (error) {
                 logger_1.logger.error(`Failed to schedule overdue reminder for milestone ${milestone.id}:`, error);
-                await prisma.reminder.delete({ where: { id: reminder.id } }).catch(() => { });
+                await (0, database_1.executeWithRetry)(async () => {
+                    return await prisma.reminder.delete({ where: { id: reminder.id } });
+                }).catch(() => { });
             }
         }
     }
@@ -353,14 +440,16 @@ async function checkAndNotifyOverdueMilestones() {
 async function scheduleGoalTargetDateNotifications(goalId, userId, targetDate, goalTitle) {
     try {
         const prisma = (0, database_1.getPrismaClient)();
-        await prisma.reminder.deleteMany({
-            where: {
-                targetType: 'GOAL',
-                userId,
-                note: {
-                    contains: goalTitle,
+        await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.reminder.deleteMany({
+                where: {
+                    targetType: 'GOAL',
+                    userId,
+                    note: {
+                        contains: goalTitle,
+                    },
                 },
-            },
+            });
         });
         const now = new Date();
         const targetDateTime = new Date(targetDate);
@@ -374,54 +463,75 @@ async function scheduleGoalTargetDateNotifications(goalId, userId, targetDate, g
         oneDayBefore.setDate(oneDayBefore.getDate() - 1);
         const reminders = [];
         if (oneWeekBefore > now && oneWeekBefore < targetDateTime) {
-            const reminder1 = await prisma.reminder.create({
-                data: {
-                    userId,
-                    targetType: 'GOAL',
-                    targetId: null,
-                    title: `Goal Deadline in 1 Week: ${goalTitle}`,
-                    note: `Your goal "${goalTitle}" deadline is in 1 week.`,
-                    triggerType: 'TIME',
-                    schedule: {
-                        at: oneWeekBefore.toISOString(),
-                        goalId: goalId,
-                    },
-                },
-            });
-            reminders.push({ reminder: reminder1, time: oneWeekBefore, type: 'GOAL_REMINDER' });
+            try {
+                const reminder1 = await (0, database_1.executeWithRetry)(async () => {
+                    return await prisma.reminder.create({
+                        data: {
+                            userId,
+                            targetType: 'GOAL',
+                            targetId: null,
+                            title: `Goal Deadline in 1 Week: ${goalTitle}`,
+                            note: `Your goal "${goalTitle}" deadline is in 1 week.`,
+                            triggerType: 'TIME',
+                            schedule: {
+                                at: oneWeekBefore.toISOString(),
+                                goalId: goalId,
+                            },
+                        },
+                    });
+                });
+                reminders.push({ reminder: reminder1, time: oneWeekBefore, type: 'GOAL_REMINDER' });
+            }
+            catch (error) {
+                logger_1.logger.error(`Failed to create 1-week-before reminder for goal ${goalId}:`, error);
+            }
         }
         if (oneDayBefore > now && oneDayBefore < targetDateTime) {
-            const reminder2 = await prisma.reminder.create({
-                data: {
-                    userId,
-                    targetType: 'GOAL',
-                    targetId: null,
-                    title: `Goal Deadline Tomorrow: ${goalTitle}`,
-                    note: `Your goal "${goalTitle}" deadline is tomorrow.`,
-                    triggerType: 'TIME',
-                    schedule: {
-                        at: oneDayBefore.toISOString(),
-                        goalId: goalId,
-                    },
-                },
-            });
-            reminders.push({ reminder: reminder2, time: oneDayBefore, type: 'GOAL_REMINDER' });
+            try {
+                const reminder2 = await (0, database_1.executeWithRetry)(async () => {
+                    return await prisma.reminder.create({
+                        data: {
+                            userId,
+                            targetType: 'GOAL',
+                            targetId: null,
+                            title: `Goal Deadline Tomorrow: ${goalTitle}`,
+                            note: `Your goal "${goalTitle}" deadline is tomorrow.`,
+                            triggerType: 'TIME',
+                            schedule: {
+                                at: oneDayBefore.toISOString(),
+                                goalId: goalId,
+                            },
+                        },
+                    });
+                });
+                reminders.push({ reminder: reminder2, time: oneDayBefore, type: 'GOAL_REMINDER' });
+            }
+            catch (error) {
+                logger_1.logger.error(`Failed to create 1-day-before reminder for goal ${goalId}:`, error);
+            }
         }
-        const reminder3 = await prisma.reminder.create({
-            data: {
-                userId,
-                targetType: 'GOAL',
-                targetId: null,
-                title: `Goal Deadline Today: ${goalTitle}`,
-                note: `Your goal "${goalTitle}" deadline is today.`,
-                triggerType: 'TIME',
-                schedule: {
-                    at: targetDateTime.toISOString(),
-                    goalId: goalId,
-                },
-            },
-        });
-        reminders.push({ reminder: reminder3, time: targetDateTime, type: 'GOAL_REMINDER' });
+        try {
+            const reminder3 = await (0, database_1.executeWithRetry)(async () => {
+                return await prisma.reminder.create({
+                    data: {
+                        userId,
+                        targetType: 'GOAL',
+                        targetId: null,
+                        title: `Goal Deadline Today: ${goalTitle}`,
+                        note: `Your goal "${goalTitle}" deadline is today.`,
+                        triggerType: 'TIME',
+                        schedule: {
+                            at: targetDateTime.toISOString(),
+                            goalId: goalId,
+                        },
+                    },
+                });
+            });
+            reminders.push({ reminder: reminder3, time: targetDateTime, type: 'GOAL_REMINDER' });
+        }
+        catch (error) {
+            logger_1.logger.error(`Failed to create due-time reminder for goal ${goalId}:`, error);
+        }
         for (const { reminder, time, type } of reminders) {
             try {
                 await (0, queueService_1.scheduleReminder)(reminder.id, userId, time, type);
@@ -429,7 +539,9 @@ async function scheduleGoalTargetDateNotifications(goalId, userId, targetDate, g
             }
             catch (error) {
                 logger_1.logger.error(`Failed to schedule reminder for goal ${goalId}:`, error);
-                await prisma.reminder.delete({ where: { id: reminder.id } }).catch(() => { });
+                await (0, database_1.executeWithRetry)(async () => {
+                    return await prisma.reminder.delete({ where: { id: reminder.id } });
+                }).catch(() => { });
             }
         }
     }
@@ -440,14 +552,16 @@ async function scheduleGoalTargetDateNotifications(goalId, userId, targetDate, g
 async function cancelAlarmPushNotifications(alarmId, userId) {
     try {
         const prisma = (0, database_1.getPrismaClient)();
-        const notifications = await prisma.notification.findMany({
-            where: {
-                userId,
-                payload: {
-                    path: ['alarmId'],
-                    equals: alarmId,
+        const notifications = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.notification.findMany({
+                where: {
+                    userId,
+                    payload: {
+                        path: ['alarmId'],
+                        equals: alarmId,
+                    },
                 },
-            },
+            });
         });
         const { getQueue } = await Promise.resolve().then(() => __importStar(require('./queueService')));
         const notificationQueue = getQueue('NOTIFICATIONS');
@@ -469,14 +583,16 @@ async function cancelAlarmPushNotifications(alarmId, userId) {
                 logger_1.logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
             }
         }
-        const deleted = await prisma.notification.deleteMany({
-            where: {
-                userId,
-                payload: {
-                    path: ['alarmId'],
-                    equals: alarmId,
+        const deleted = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.notification.deleteMany({
+                where: {
+                    userId,
+                    payload: {
+                        path: ['alarmId'],
+                        equals: alarmId,
+                    },
                 },
-            },
+            });
         });
         logger_1.logger.info(`Cancelled ${deleted.count} scheduled notifications for alarm ${alarmId}`);
     }
@@ -487,15 +603,17 @@ async function cancelAlarmPushNotifications(alarmId, userId) {
 async function cancelAllPendingAlarmNotifications(userId) {
     try {
         const prisma = (0, database_1.getPrismaClient)();
-        const notifications = await prisma.notification.findMany({
-            where: {
-                userId,
-                status: 'PENDING',
-                payload: {
-                    path: ['notificationType'],
-                    equals: ALARM_NOTIFICATION_TYPE,
+        const notifications = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.notification.findMany({
+                where: {
+                    userId,
+                    status: 'PENDING',
+                    payload: {
+                        path: ['notificationType'],
+                        equals: ALARM_NOTIFICATION_TYPE,
+                    },
                 },
-            },
+            });
         });
         logger_1.logger.info(`Found ${notifications.length} pending alarm notifications for user ${userId}`);
         const { getQueue } = await Promise.resolve().then(() => __importStar(require('./queueService')));
@@ -520,15 +638,17 @@ async function cancelAllPendingAlarmNotifications(userId) {
                 logger_1.logger.warn(`Failed to remove job for notification ${notification.id}:`, jobError);
             }
         }
-        const deleted = await prisma.notification.deleteMany({
-            where: {
-                userId,
-                status: 'PENDING',
-                payload: {
-                    path: ['notificationType'],
-                    equals: ALARM_NOTIFICATION_TYPE,
+        const deleted = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.notification.deleteMany({
+                where: {
+                    userId,
+                    status: 'PENDING',
+                    payload: {
+                        path: ['notificationType'],
+                        equals: ALARM_NOTIFICATION_TYPE,
+                    },
                 },
-            },
+            });
         });
         logger_1.logger.info(`Cancelled ${deleted.count} pending alarm notifications for user ${userId}`);
         return deleted.count;
@@ -593,20 +713,22 @@ async function scheduleAlarmPushNotification(alarm) {
     const alarmTimeStr = scheduledAlarmTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const body = `It's time for "${alarm.title}" at ${alarmTimeStr}.`;
     try {
-        const notification = await prisma.notification.create({
-            data: {
-                userId: alarm.userId,
-                type: 'IN_APP',
-                payload: {
-                    title,
-                    body,
-                    alarmId: alarm.id,
-                    notificationType: ALARM_NOTIFICATION_TYPE,
-                    alarmTime: scheduledAlarmTime.toISOString(),
+        const notification = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.notification.create({
+                data: {
+                    userId: alarm.userId,
+                    type: 'IN_APP',
+                    payload: {
+                        title,
+                        body,
+                        alarmId: alarm.id,
+                        notificationType: ALARM_NOTIFICATION_TYPE,
+                        alarmTime: scheduledAlarmTime.toISOString(),
+                    },
+                    scheduledFor: scheduledAlarmTime,
+                    status: 'PENDING',
                 },
-                scheduledFor: scheduledAlarmTime,
-                status: 'PENDING',
-            },
+            });
         });
         await (0, queueService_2.scheduleNotification)(notification.id, alarm.userId, scheduledAlarmTime, ALARM_NOTIFICATION_TYPE, {
             title,
@@ -620,14 +742,16 @@ async function scheduleAlarmPushNotification(alarm) {
     catch (error) {
         logger_1.logger.error(`Failed to schedule push notification for alarm ${alarm.id}:`, error);
         try {
-            await prisma.notification.deleteMany({
-                where: {
-                    userId: alarm.userId,
-                    payload: {
-                        path: ['alarmId'],
-                        equals: alarm.id,
+            await (0, database_1.executeWithRetry)(async () => {
+                return await prisma.notification.deleteMany({
+                    where: {
+                        userId: alarm.userId,
+                        payload: {
+                            path: ['alarmId'],
+                            equals: alarm.id,
+                        },
                     },
-                },
+                });
             });
         }
         catch (cleanupError) {
@@ -638,19 +762,21 @@ async function scheduleAlarmPushNotification(alarm) {
 async function sendTaskAssignmentNotification(taskId, assigneeId, taskTitle, assignerName) {
     try {
         const prisma = (0, database_1.getPrismaClient)();
-        const notification = await prisma.notification.create({
-            data: {
-                userId: assigneeId,
-                type: 'IN_APP',
-                payload: {
-                    taskId,
-                    title: taskTitle,
-                    assignerName: assignerName || 'Someone',
-                    notificationType: 'TASK_ASSIGNMENT',
+        const notification = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.notification.create({
+                data: {
+                    userId: assigneeId,
+                    type: 'IN_APP',
+                    payload: {
+                        taskId,
+                        title: taskTitle,
+                        assignerName: assignerName || 'Someone',
+                        notificationType: 'TASK_ASSIGNMENT',
+                    },
+                    scheduledFor: new Date(),
+                    status: 'PENDING',
                 },
-                scheduledFor: new Date(),
-                status: 'PENDING',
-            },
+            });
         });
         await (0, queueService_2.scheduleNotification)(notification.id, assigneeId, getImmediateScheduleTime(), 'TASK_ASSIGNMENT', {
             title: `New Task Assigned: ${taskTitle}`,
@@ -667,21 +793,23 @@ async function sendTaskAssignmentNotification(taskId, assigneeId, taskTitle, ass
 async function sendTaskCreatedNotification(taskId, userId, taskTitle, context) {
     try {
         const prisma = (0, database_1.getPrismaClient)();
-        const notification = await prisma.notification.create({
-            data: {
-                userId,
-                type: 'IN_APP',
-                payload: {
-                    taskId,
-                    title: `Task Created: ${taskTitle}`,
-                    body: context?.projectTitle
-                        ? `You created "${taskTitle}" in project ${context.projectTitle}.`
-                        : `You created a new task: "${taskTitle}".`,
-                    notificationType: 'TASK_CREATED',
+        const notification = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.notification.create({
+                data: {
+                    userId,
+                    type: 'IN_APP',
+                    payload: {
+                        taskId,
+                        title: `Task Created: ${taskTitle}`,
+                        body: context?.projectTitle
+                            ? `You created "${taskTitle}" in project ${context.projectTitle}.`
+                            : `You created a new task: "${taskTitle}".`,
+                        notificationType: 'TASK_CREATED',
+                    },
+                    scheduledFor: new Date(),
+                    status: 'PENDING',
                 },
-                scheduledFor: new Date(),
-                status: 'PENDING',
-            },
+            });
         });
         await (0, queueService_2.scheduleNotification)(notification.id, userId, getImmediateScheduleTime(), 'TASK_CREATED', {
             title: `Task Created: ${taskTitle}`,
@@ -699,14 +827,16 @@ async function scheduleRoutineTaskNotifications(routineId, userId, routineTitle,
     try {
         const prisma = (0, database_1.getPrismaClient)();
         const now = new Date();
-        await prisma.reminder.deleteMany({
-            where: {
-                targetType: 'CUSTOM',
-                userId,
-                note: {
-                    contains: taskTitle,
+        await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.reminder.deleteMany({
+                where: {
+                    targetType: 'CUSTOM',
+                    userId,
+                    note: {
+                        contains: taskTitle,
+                    },
                 },
-            },
+            });
         });
         if (!schedule.time) {
             logger_1.logger.info(`Routine ${routineId} has no time set, skipping notification scheduling`);
@@ -804,16 +934,18 @@ async function scheduleRoutineTaskNotifications(routineId, userId, routineTitle,
             routineId: routineId,
             taskId: taskId,
         };
-        const reminder = await prisma.reminder.create({
-            data: {
-                userId,
-                targetType: 'CUSTOM',
-                targetId: null,
-                title: `Routine: ${routineTitle}`,
-                note: `Time to complete "${taskTitle}"`,
-                triggerType: 'TIME',
-                schedule: fullReminderSchedule,
-            },
+        const reminder = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.reminder.create({
+                data: {
+                    userId,
+                    targetType: 'CUSTOM',
+                    targetId: null,
+                    title: `Routine: ${routineTitle}`,
+                    note: `Time to complete "${taskTitle}"`,
+                    triggerType: 'TIME',
+                    schedule: fullReminderSchedule,
+                },
+            });
         });
         try {
             const delay = nextOccurrence.getTime() - Date.now();
@@ -910,19 +1042,23 @@ async function scheduleRoutineTaskNotifications(routineId, userId, routineTitle,
 async function cancelRoutineTaskNotifications(taskId, userId) {
     try {
         const prisma = (0, database_1.getPrismaClient)();
-        const allCustomReminders = await prisma.reminder.findMany({
-            where: {
-                targetType: 'CUSTOM',
-                userId,
-            },
+        const allCustomReminders = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.reminder.findMany({
+                where: {
+                    targetType: 'CUSTOM',
+                    userId,
+                },
+            });
         });
         const matchingReminders = allCustomReminders.filter((reminder) => {
             const schedule = reminder.schedule;
             return schedule?.taskId === taskId;
         });
         for (const reminder of matchingReminders) {
-            await prisma.reminder.delete({
-                where: { id: reminder.id },
+            await (0, database_1.executeWithRetry)(async () => {
+                return await prisma.reminder.delete({
+                    where: { id: reminder.id },
+                });
             });
         }
         logger_1.logger.info(`Cancelled ${matchingReminders.length} reminders for routine task ${taskId}`);
@@ -934,20 +1070,24 @@ async function cancelRoutineTaskNotifications(taskId, userId) {
 async function cancelRoutineNotifications(routineId, userId) {
     try {
         const prisma = (0, database_1.getPrismaClient)();
-        const routine = await prisma.routine.findUnique({
-            where: { id: routineId },
-            include: { routineTasks: true },
+        const routine = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.routine.findUnique({
+                where: { id: routineId },
+                include: { routineTasks: true },
+            });
         });
         if (!routine) {
             return;
         }
-        await prisma.alarm.deleteMany({
-            where: {
-                userId,
-                title: {
-                    contains: `Routine: ${routine.title}`,
+        await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.alarm.deleteMany({
+                where: {
+                    userId,
+                    title: {
+                        contains: `Routine: ${routine.title}`,
+                    },
                 },
-            },
+            });
         });
         for (const task of routine.routineTasks) {
             await cancelRoutineTaskNotifications(task.id, userId);
@@ -980,17 +1120,38 @@ async function scheduleRoutineReminderNotification(routineId, userId, routineTit
             reminderTime.setDate(reminderTime.getDate() - (value * 7));
         }
         if (reminderTime <= now) {
-            logger_1.logger.info(`Routine reminder time is in the past, skipping: ${reminderTime.toISOString()}`);
-            return;
+            logger_1.logger.info(`Routine reminder time is in the past: ${reminderTime.toISOString()}, calculating next reminder time`);
+            if (frequency === 'DAILY') {
+                reminderTime.setDate(reminderTime.getDate() + 1);
+            }
+            else if (frequency === 'WEEKLY' && schedule.days && schedule.days.length > 0) {
+                reminderTime.setDate(reminderTime.getDate() + 7);
+            }
+            else if (frequency === 'MONTHLY' && schedule.day) {
+                reminderTime.setMonth(reminderTime.getMonth() + 1);
+            }
+            else {
+                reminderTime.setDate(reminderTime.getDate() + 1);
+            }
+            logger_1.logger.info(`Recalculated reminder time to: ${reminderTime.toISOString()}`);
+            if (reminderTime <= now) {
+                logger_1.logger.error(`Recalculated reminder time is still in the past, skipping: ${reminderTime.toISOString()}, now: ${now.toISOString()}`);
+                return;
+            }
         }
-        await prisma.reminder.deleteMany({
-            where: {
-                targetType: 'CUSTOM',
-                userId,
-                title: {
-                    contains: `Routine Reminder: ${routineTitle}`,
+        else {
+            logger_1.logger.info(`Reminder time is in the future: ${reminderTime.toISOString()}, scheduling normally`);
+        }
+        await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.reminder.deleteMany({
+                where: {
+                    targetType: 'CUSTOM',
+                    userId,
+                    title: {
+                        contains: `Routine Reminder: ${routineTitle}`,
+                    },
                 },
-            },
+            });
         });
         const reminderSchedule = {
             frequency,
@@ -1005,16 +1166,18 @@ async function scheduleRoutineReminderNotification(routineId, userId, routineTit
         else if (frequency === 'MONTHLY' && schedule.day) {
             reminderSchedule.day = schedule.day;
         }
-        const reminder = await prisma.reminder.create({
-            data: {
-                userId,
-                targetType: 'CUSTOM',
-                targetId: null,
-                title: `Routine Reminder: ${routineTitle}`,
-                note: `Your routine "${routineTitle}" is coming up soon`,
-                triggerType: 'TIME',
-                schedule: reminderSchedule,
-            },
+        const reminder = await (0, database_1.executeWithRetry)(async () => {
+            return await prisma.reminder.create({
+                data: {
+                    userId,
+                    targetType: 'CUSTOM',
+                    targetId: null,
+                    title: `Routine Reminder: ${routineTitle}`,
+                    note: `Your routine "${routineTitle}" is coming up soon`,
+                    triggerType: 'TIME',
+                    schedule: reminderSchedule,
+                },
+            });
         });
         const delay = reminderTime.getTime() - Date.now();
         if (delay <= 0) {
@@ -1026,15 +1189,18 @@ async function scheduleRoutineReminderNotification(routineId, userId, routineTit
             return;
         }
         const job = await (0, queueService_1.scheduleReminder)(reminder.id, userId, reminderTime, 'ROUTINE_REMINDER');
-        logger_1.logger.info(`Scheduled routine reminder notification for routine ${routineId}`, {
+        logger_1.logger.info(`✅ Scheduled routine reminder notification for routine ${routineId}`, {
             reminderId: reminder.id,
             routineId,
             reminderTime: reminderTime.toISOString(),
+            reminderTimeLocal: `${reminderTime.getHours()}:${String(reminderTime.getMinutes()).padStart(2, '0')}`,
             nextOccurrence: nextOccurrence.toISOString(),
+            nextOccurrenceLocal: `${nextOccurrence.getHours()}:${String(nextOccurrence.getMinutes()).padStart(2, '0')}`,
             reminderBefore,
             jobId: job.id,
             delayMs: delay,
             delayMinutes: Math.round(delay / 60000),
+            delayHours: Math.round(delay / 3600000 * 10) / 10,
         });
     }
     catch (error) {
@@ -1082,9 +1248,10 @@ async function scheduleRoutineNotifications(routineId, _userId) {
         if (routine.frequency === 'DAILY') {
             nextOccurrence = new Date(now);
             nextOccurrence.setHours(routineHours, routineMinutes, 0, 0);
-            if (nextOccurrence <= now) {
+            if (nextOccurrence.getTime() <= now.getTime() + 1000) {
                 nextOccurrence.setDate(nextOccurrence.getDate() + 1);
             }
+            logger_1.logger.info(`Calculated nextOccurrence for DAILY routine: ${nextOccurrence.toISOString()}, now: ${now.toISOString()}`);
         }
         else if (routine.frequency === 'WEEKLY' && schedule.days && schedule.days.length > 0) {
             const currentDay = now.getDay();
@@ -1111,7 +1278,19 @@ async function scheduleRoutineNotifications(routineId, _userId) {
             }
         }
         if (routine.reminderBefore && nextOccurrence) {
-            await scheduleRoutineReminderNotification(routine.id, routine.userId, routine.title, routine.frequency, schedule, routine.timezone, routine.reminderBefore, nextOccurrence);
+            logger_1.logger.info(`Scheduling routine reminder for routine ${routine.id}`, {
+                routineId: routine.id,
+                routineTitle: routine.title,
+                reminderBefore: routine.reminderBefore,
+                nextOccurrence: nextOccurrence.toISOString(),
+                frequency: routine.frequency,
+            });
+            await scheduleRoutineReminderNotification(routine.id, routine.userId, routine.title, routine.frequency, schedule, routine.timezone, routine.reminderBefore, nextOccurrence).catch(err => {
+                logger_1.logger.error(`Failed to schedule routine reminder notification:`, err);
+            });
+        }
+        else {
+            logger_1.logger.info(`No reminderBefore set for routine ${routine.id} (reminderBefore: ${routine.reminderBefore}, nextOccurrence: ${nextOccurrence?.toISOString()})`);
         }
         for (const task of routine.routineTasks) {
             await scheduleRoutineTaskNotifications(routine.id, routine.userId, routine.title, routine.frequency, schedule, routine.timezone, task.id, task.title, task.reminderTime, routine.reminderBefore);
@@ -1126,13 +1305,15 @@ async function createAlarmForRoutineReminder(routineId, taskId, userId, routineT
     try {
         const prisma = (0, database_1.getPrismaClient)();
         try {
-            await prisma.alarm.deleteMany({
-                where: {
-                    userId,
-                    title: {
-                        contains: `Routine: ${routineTitle}`,
+            await (0, database_1.executeWithRetry)(async () => {
+                return await prisma.alarm.deleteMany({
+                    where: {
+                        userId,
+                        title: {
+                            contains: `Routine: ${routineTitle}`,
+                        },
                     },
-                },
+                });
             });
         }
         catch (deleteError) {
@@ -1142,42 +1323,96 @@ async function createAlarmForRoutineReminder(routineId, taskId, userId, routineT
                 routineTitle,
             });
         }
-        let alarmHours;
-        let alarmMinutes;
-        if (reminderTime && reminderTime.includes(':')) {
-            [alarmHours, alarmMinutes] = reminderTime.split(':').map(Number);
-            logger_1.logger.info(`Using provided reminderTime as alarm time: ${reminderTime}`);
-        }
-        else {
-            const [routineHours, routineMinutes] = (schedule.time || '00:00').split(':').map(Number);
-            alarmHours = routineHours;
-            alarmMinutes = routineMinutes;
-        }
         const alarmTime = new Date(nextOccurrence);
-        alarmTime.setHours(alarmHours, alarmMinutes, 0, 0);
-        logger_1.logger.info(`Initial alarm time calculation: reminderTime=${reminderTime}, alarmHours=${alarmHours}, alarmMinutes=${alarmMinutes}, nextOccurrence=${nextOccurrence.toISOString()}, alarmTime=${alarmTime.toISOString()}`);
-        if (reminderBefore) {
+        if (reminderTime && reminderTime.includes(':')) {
+            const [reminderH, reminderM] = reminderTime.split(':').map(Number);
+            const [routineH, routineM] = (schedule.time || '00:00').split(':').map(Number);
+            alarmTime.setHours(reminderH, reminderM, 0, 0);
+            logger_1.logger.info(`Using provided reminderTime: ${reminderTime}, nextOccurrence: ${nextOccurrence.toISOString()}, alarm time set to: ${alarmTime.toISOString()}`);
+        }
+        else if (reminderBefore) {
             const match = reminderBefore.match(/^(\d+)([hdw])$/);
             if (match) {
                 const [, valueStr, unit] = match;
                 const value = parseInt(valueStr, 10);
-                if (unit === 'd') {
+                if (unit === 'h') {
+                    alarmTime.setHours(alarmTime.getHours() - value);
+                }
+                else if (unit === 'd') {
                     alarmTime.setDate(alarmTime.getDate() - value);
                 }
                 else if (unit === 'w') {
                     alarmTime.setDate(alarmTime.getDate() - (value * 7));
                 }
-                if (unit === 'h') {
-                    const routineTimeOnSameDay = new Date(nextOccurrence);
-                    const [routineH, routineM] = (schedule.time || '00:00').split(':').map(Number);
-                    routineTimeOnSameDay.setHours(routineH, routineM, 0, 0);
-                    if (alarmTime.getHours() < routineH ||
-                        (alarmTime.getHours() === routineH && alarmTime.getMinutes() < routineM)) {
-                        alarmTime.setDate(alarmTime.getDate() - 1);
-                        logger_1.logger.info(`Adjusted alarm date backward: alarm time ${alarmTime.getHours()}:${alarmTime.getMinutes()} is before routine time ${routineH}:${routineM}`);
+                logger_1.logger.info(`Using reminderBefore to calculate: ${reminderBefore}, alarm time: ${alarmTime.toISOString()}`);
+            }
+        }
+        const now = new Date();
+        if (alarmTime <= now) {
+            logger_1.logger.warn(`Alarm time is in the past: ${alarmTime.toISOString()}, recalculating from nextOccurrence`);
+            alarmTime.setTime(nextOccurrence.getTime());
+            if (reminderBefore) {
+                const match = reminderBefore.match(/^(\d+)([hdw])$/);
+                if (match) {
+                    const [, valueStr, unit] = match;
+                    const value = parseInt(valueStr, 10);
+                    if (unit === 'h') {
+                        alarmTime.setHours(alarmTime.getHours() - value);
+                    }
+                    else if (unit === 'd') {
+                        alarmTime.setDate(alarmTime.getDate() - value);
+                    }
+                    else if (unit === 'w') {
+                        alarmTime.setDate(alarmTime.getDate() - (value * 7));
                     }
                 }
             }
+            else if (reminderTime && reminderTime.includes(':')) {
+                const [reminderH, reminderM] = reminderTime.split(':').map(Number);
+                const [routineH, routineM] = (schedule.time || '00:00').split(':').map(Number);
+                alarmTime.setHours(reminderH, reminderM, 0, 0);
+                if (reminderH < routineH || (reminderH === routineH && reminderM < routineM)) {
+                    alarmTime.setDate(alarmTime.getDate() - 1);
+                }
+            }
+            if (alarmTime <= now) {
+                logger_1.logger.warn(`Alarm time still in the past after recalculation: ${alarmTime.toISOString()}, adding one cycle`);
+                if (frequency === 'DAILY') {
+                    alarmTime.setDate(alarmTime.getDate() + 1);
+                }
+                else if (frequency === 'WEEKLY' && schedule.days && schedule.days.length > 0) {
+                    alarmTime.setDate(alarmTime.getDate() + 7);
+                }
+                else if (frequency === 'MONTHLY' && schedule.day) {
+                    alarmTime.setMonth(alarmTime.getMonth() + 1);
+                }
+                else {
+                    alarmTime.setDate(alarmTime.getDate() + 1);
+                }
+                if (reminderBefore) {
+                    const match = reminderBefore.match(/^(\d+)([hdw])$/);
+                    if (match) {
+                        const [, valueStr, unit] = match;
+                        const value = parseInt(valueStr, 10);
+                        if (unit === 'h') {
+                            alarmTime.setHours(alarmTime.getHours() - value);
+                        }
+                        else if (unit === 'd') {
+                            alarmTime.setDate(alarmTime.getDate() - value);
+                        }
+                        else if (unit === 'w') {
+                            alarmTime.setDate(alarmTime.getDate() - (value * 7));
+                        }
+                    }
+                }
+                logger_1.logger.info(`After adding cycle and re-applying reminderBefore: ${alarmTime.toISOString()}`);
+            }
+            logger_1.logger.info(`Adjusted alarm time to next occurrence: ${alarmTime.toISOString()}`);
+        }
+        logger_1.logger.info(`Final alarm time calculation: reminderBefore=${reminderBefore}, reminderTime=${reminderTime}, nextOccurrence=${nextOccurrence.toISOString()}, alarmTime=${alarmTime.toISOString()}, alarmTimeLocal=${alarmTime.getHours()}:${String(alarmTime.getMinutes()).padStart(2, '0')}, now=${now.toISOString()}`);
+        if (alarmTime <= now) {
+            logger_1.logger.error(`❌ CRITICAL: Alarm time is still in the past after all calculations! alarmTime=${alarmTime.toISOString()}, now=${now.toISOString()}`);
+            return;
         }
         let recurrenceRule = null;
         if (frequency === 'DAILY') {
@@ -1196,20 +1431,22 @@ async function createAlarmForRoutineReminder(routineId, taskId, userId, routineT
         }
         let alarm;
         try {
-            alarm = await prisma.alarm.create({
-                data: {
-                    userId,
-                    title: `Routine: ${routineTitle}`,
-                    time: alarmTime,
-                    timezone: timezone || 'UTC',
-                    recurrenceRule,
-                    enabled: true,
-                    snoozeConfig: {
-                        duration: 5,
-                        maxSnoozes: 3,
+            alarm = await (0, database_1.executeWithRetry)(async () => {
+                return await prisma.alarm.create({
+                    data: {
+                        userId,
+                        title: `Routine: ${routineTitle}`,
+                        time: alarmTime,
+                        timezone: timezone || 'UTC',
+                        recurrenceRule,
+                        enabled: true,
+                        snoozeConfig: {
+                            duration: 5,
+                            maxSnoozes: 3,
+                        },
+                        smartWakeWindow: 5,
                     },
-                    smartWakeWindow: 5,
-                },
+                });
             });
             logger_1.logger.info(`Alarm created successfully in database`, {
                 alarmId: alarm.id,
@@ -1244,20 +1481,22 @@ async function createAlarmForRoutineReminder(routineId, taskId, userId, routineT
             });
         }
         try {
-            await prisma.reminder.updateMany({
-                where: {
-                    userId,
-                    targetType: 'CUSTOM',
-                    note: {
-                        contains: taskTitle,
+            await (0, database_1.executeWithRetry)(async () => {
+                return await prisma.reminder.updateMany({
+                    where: {
+                        userId,
+                        targetType: 'CUSTOM',
+                        note: {
+                            contains: taskTitle,
+                        },
                     },
-                },
-                data: {
-                    schedule: {
-                        ...reminderSchedule,
-                        alarmId: alarm.id,
+                    data: {
+                        schedule: {
+                            ...reminderSchedule,
+                            alarmId: alarm.id,
+                        },
                     },
-                },
+                });
             });
         }
         catch (updateError) {

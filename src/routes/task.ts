@@ -102,6 +102,10 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
 
     if (goalId) {
       where.goalId = goalId;
+      logger.info(`Filtering tasks by goalId: ${goalId}`);
+    } else {
+      // Log that we're NOT filtering by goalId, so all tasks should be returned
+      logger.info('Fetching all tasks (no goalId filter) - should include regular tasks');
     }
 
     if (assigneeId) {
@@ -132,12 +136,25 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
       take: Number(limit),
     });
 
-    // Get routine tasks as tasks
-    const { routineService } = await import('../services/routineService');
-    const routineTasks = await routineService.getRoutineTasksAsTasks(userId);
+    // Log task breakdown BEFORE adding routine tasks
+    logger.info(`Retrieved ${tasks.length} tasks from database`, {
+      total: tasks.length,
+      withGoalId: tasks.filter(t => t.goalId).length,
+      withoutGoalId: tasks.filter(t => !t.goalId).length,
+      withProjectId: tasks.filter(t => t.projectId).length,
+      regularTasks: tasks.filter(t => !t.goalId && !t.projectId).length,
+      goalId: goalId || 'none',
+      whereClause: JSON.stringify(where),
+    });
+
+    // Get routine tasks as tasks (but we removed routines from tasks screen per user request)
+    // So skip routine tasks for now
+    // const { routineService } = await import('../services/routineService');
+    // const routineTasks = await routineService.getRoutineTasksAsTasks(userId);
 
     // Merge routine tasks with regular tasks
-    let allTasks = [...tasks, ...routineTasks];
+    // For now, only return regular tasks (routines removed per user request)
+    let allTasks = [...tasks]; // Remove routine tasks: [...tasks, ...routineTasks];
 
     // Apply filters to routine tasks if needed
     if (status) {
@@ -157,11 +174,28 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
     // Sort all tasks by order
     allTasks.sort((a, b) => (a.order || 0) - (b.order || 0));
 
+    // Log final task breakdown
+    logger.info(`Final tasks after filtering (before pagination):`, {
+      total: allTasks.length,
+      withGoalId: allTasks.filter(t => t.goalId).length,
+      withoutGoalId: allTasks.filter(t => !t.goalId).length,
+      withProjectId: allTasks.filter(t => t.projectId).length,
+      regularTasks: allTasks.filter(t => !t.goalId && !t.projectId).length,
+    });
+
     // Apply pagination
     const paginatedTasks = allTasks.slice(
       (Number(page) - 1) * Number(limit),
       Number(page) * Number(limit)
     );
+    
+    logger.info(`Returning paginated tasks:`, {
+      page: Number(page),
+      limit: Number(limit),
+      paginatedCount: paginatedTasks.length,
+      total: allTasks.length,
+      regularTasksInPage: paginatedTasks.filter(t => !t.goalId && !t.projectId).length,
+    });
     
     res.json({
       success: true,

@@ -114,6 +114,10 @@ router.get('/', async (req, res) => {
         }
         if (goalId) {
             where.goalId = goalId;
+            logger_1.logger.info(`Filtering tasks by goalId: ${goalId}`);
+        }
+        else {
+            logger_1.logger.info('Fetching all tasks (no goalId filter) - should include regular tasks');
         }
         if (assigneeId) {
             where.assigneeId = assigneeId;
@@ -141,9 +145,16 @@ router.get('/', async (req, res) => {
             skip: (Number(page) - 1) * Number(limit),
             take: Number(limit),
         });
-        const { routineService } = await Promise.resolve().then(() => __importStar(require('../services/routineService')));
-        const routineTasks = await routineService.getRoutineTasksAsTasks(userId);
-        let allTasks = [...tasks, ...routineTasks];
+        logger_1.logger.info(`Retrieved ${tasks.length} tasks from database`, {
+            total: tasks.length,
+            withGoalId: tasks.filter(t => t.goalId).length,
+            withoutGoalId: tasks.filter(t => !t.goalId).length,
+            withProjectId: tasks.filter(t => t.projectId).length,
+            regularTasks: tasks.filter(t => !t.goalId && !t.projectId).length,
+            goalId: goalId || 'none',
+            whereClause: JSON.stringify(where),
+        });
+        let allTasks = [...tasks];
         if (status) {
             allTasks = allTasks.filter(t => t.status === status);
         }
@@ -156,7 +167,21 @@ router.get('/', async (req, res) => {
                 (t.description && t.description.toLowerCase().includes(searchLower)));
         }
         allTasks.sort((a, b) => (a.order || 0) - (b.order || 0));
+        logger_1.logger.info(`Final tasks after filtering (before pagination):`, {
+            total: allTasks.length,
+            withGoalId: allTasks.filter(t => t.goalId).length,
+            withoutGoalId: allTasks.filter(t => !t.goalId).length,
+            withProjectId: allTasks.filter(t => t.projectId).length,
+            regularTasks: allTasks.filter(t => !t.goalId && !t.projectId).length,
+        });
         const paginatedTasks = allTasks.slice((Number(page) - 1) * Number(limit), Number(page) * Number(limit));
+        logger_1.logger.info(`Returning paginated tasks:`, {
+            page: Number(page),
+            limit: Number(limit),
+            paginatedCount: paginatedTasks.length,
+            total: allTasks.length,
+            regularTasksInPage: paginatedTasks.filter(t => !t.goalId && !t.projectId).length,
+        });
         res.json({
             success: true,
             data: paginatedTasks,
