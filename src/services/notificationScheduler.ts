@@ -1700,15 +1700,30 @@ async function createAlarmForRoutineReminder(
       const [reminderH, reminderM] = reminderTime.split(':').map(Number);
       const [routineH, routineM] = (schedule.time || '00:00').split(':').map(Number);
       
-      // Set the alarm time to the reminder time on the same date as nextOccurrence
-      // Since reminderTime was calculated from reminderBefore, it's relative to nextOccurrence
-      // So we use nextOccurrence's date and set the time to reminderTime
+      // Set the alarm time to the reminder time
+      // For reminderBefore='1d' or '1w', we need to subtract days from nextOccurrence
+      // For reminderBefore='1h', we just use the reminder time on the same day as nextOccurrence
       alarmTime.setHours(reminderH, reminderM, 0, 0);
       
-      // The date should already be correct from nextOccurrence
-      // No need to adjust the date - nextOccurrence is already the future date we want
+      // If reminderBefore is set and is days or weeks, adjust the date
+      if (reminderBefore) {
+        const match = reminderBefore.match(/^(\d+)([hdw])$/);
+        if (match) {
+          const [, valueStr, unit] = match;
+          const value = parseInt(valueStr, 10);
+          
+          if (unit === 'd') {
+            // Days before - subtract days from nextOccurrence's date
+            alarmTime.setDate(alarmTime.getDate() - value);
+          } else if (unit === 'w') {
+            // Weeks before - subtract weeks from nextOccurrence's date
+            alarmTime.setDate(alarmTime.getDate() - (value * 7));
+          }
+          // For 'h' (hours), the time is already calculated correctly, just use nextOccurrence's date
+        }
+      }
       
-      logger.info(`Using provided reminderTime: ${reminderTime}, nextOccurrence: ${nextOccurrence.toISOString()}, alarm time set to: ${alarmTime.toISOString()}`);
+      logger.info(`Using provided reminderTime: ${reminderTime}, reminderBefore: ${reminderBefore}, nextOccurrence: ${nextOccurrence.toISOString()}, alarm time set to: ${alarmTime.toISOString()}`);
     } else if (reminderBefore) {
       // If reminderBefore is set but no reminderTime, calculate from nextOccurrence
       const match = reminderBefore.match(/^(\d+)([hdw])$/);

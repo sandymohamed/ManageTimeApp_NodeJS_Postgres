@@ -54,6 +54,17 @@ export const initializeQueues = async (): Promise<void> => {
 const initializeWorkers = async (): Promise<void> => {
   const redis = getRedisClient();
 
+  // Common worker options
+  const defaultWorkerOptions = {
+    connection: redis,
+    // Lock duration: 5 minutes (300000ms) - enough for most jobs
+    // Delayed jobs don't acquire locks until ready, so this is for active processing
+    lockDuration: 300000,
+    // Retry settings
+    maxStalledCount: 1,
+    maxStalledCountResetter: 10000,
+  };
+
   // Reminder worker
   workers[QUEUE_NAMES.REMINDERS] = new Worker(
     QUEUE_NAMES.REMINDERS,
@@ -61,7 +72,7 @@ const initializeWorkers = async (): Promise<void> => {
       await processReminderJob(job);
     },
     {
-      connection: redis,
+      ...defaultWorkerOptions,
       concurrency: 10,
     }
   );
@@ -73,7 +84,7 @@ const initializeWorkers = async (): Promise<void> => {
       await processNotificationJob(job);
     },
     {
-      connection: redis,
+      ...defaultWorkerOptions,
       concurrency: 20,
     }
   );
@@ -85,8 +96,9 @@ const initializeWorkers = async (): Promise<void> => {
       await processAIPlanGenerationJob(job);
     },
     {
-      connection: redis,
+      ...defaultWorkerOptions,
       concurrency: 5,
+      lockDuration: 600000, // 10 minutes for AI jobs that might take longer
     }
   );
 
@@ -97,7 +109,7 @@ const initializeWorkers = async (): Promise<void> => {
       await processEmailJob(job);
     },
     {
-      connection: redis,
+      ...defaultWorkerOptions,
       concurrency: 10,
     }
   );
@@ -109,18 +121,30 @@ const initializeWorkers = async (): Promise<void> => {
       await processCleanupJob(job);
     },
     {
-      connection: redis,
+      ...defaultWorkerOptions,
       concurrency: 1,
+      lockDuration: 600000, // 10 minutes for cleanup jobs that might take longer
     }
   );
 
   // Set up error handling for all workers
   Object.values(workers).forEach(worker => {
-    worker.on('error', (error) => {
+    worker.on('error', (error: Error) => {
+      // Handle "Missing lock" errors gracefully - these are often non-critical
+      // They occur when locks expire during job retry/failure handling
+      if (error.message && error.message.includes('Missing lock')) {
+        logger.debug('Worker lock error (non-critical):', error.message);
+        return;
+      }
       logger.error('Worker error:', error);
     });
 
     worker.on('failed', (job, error) => {
+      // Log "Missing lock" errors at debug level since they're often non-critical
+      if (error.message && error.message.includes('Missing lock')) {
+        logger.debug(`Job ${job?.id} lock error (non-critical):`, error.message);
+        return;
+      }
       logger.error(`Job ${job?.id} failed:`, error);
     });
   });

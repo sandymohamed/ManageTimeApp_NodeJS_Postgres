@@ -1328,7 +1328,20 @@ async function createAlarmForRoutineReminder(routineId, taskId, userId, routineT
             const [reminderH, reminderM] = reminderTime.split(':').map(Number);
             const [routineH, routineM] = (schedule.time || '00:00').split(':').map(Number);
             alarmTime.setHours(reminderH, reminderM, 0, 0);
-            logger_1.logger.info(`Using provided reminderTime: ${reminderTime}, nextOccurrence: ${nextOccurrence.toISOString()}, alarm time set to: ${alarmTime.toISOString()}`);
+            if (reminderBefore) {
+                const match = reminderBefore.match(/^(\d+)([hdw])$/);
+                if (match) {
+                    const [, valueStr, unit] = match;
+                    const value = parseInt(valueStr, 10);
+                    if (unit === 'd') {
+                        alarmTime.setDate(alarmTime.getDate() - value);
+                    }
+                    else if (unit === 'w') {
+                        alarmTime.setDate(alarmTime.getDate() - (value * 7));
+                    }
+                }
+            }
+            logger_1.logger.info(`Using provided reminderTime: ${reminderTime}, reminderBefore: ${reminderBefore}, nextOccurrence: ${nextOccurrence.toISOString()}, alarm time set to: ${alarmTime.toISOString()}`);
         }
         else if (reminderBefore) {
             const match = reminderBefore.match(/^(\d+)([hdw])$/);
