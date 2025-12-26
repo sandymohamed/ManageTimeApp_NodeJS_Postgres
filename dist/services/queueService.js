@@ -75,41 +75,57 @@ const initializeQueues = async () => {
 exports.initializeQueues = initializeQueues;
 const initializeWorkers = async () => {
     const redis = (0, redis_1.getRedisClient)();
+    const defaultWorkerOptions = {
+        connection: redis,
+        lockDuration: 300000,
+        maxStalledCount: 1,
+        maxStalledCountResetter: 10000,
+    };
     workers[exports.QUEUE_NAMES.REMINDERS] = new bullmq_1.Worker(exports.QUEUE_NAMES.REMINDERS, async (job) => {
         await processReminderJob(job);
     }, {
-        connection: redis,
+        ...defaultWorkerOptions,
         concurrency: 10,
     });
     workers[exports.QUEUE_NAMES.NOTIFICATIONS] = new bullmq_1.Worker(exports.QUEUE_NAMES.NOTIFICATIONS, async (job) => {
         await processNotificationJob(job);
     }, {
-        connection: redis,
+        ...defaultWorkerOptions,
         concurrency: 20,
     });
     workers[exports.QUEUE_NAMES.AI_PLAN_GENERATION] = new bullmq_1.Worker(exports.QUEUE_NAMES.AI_PLAN_GENERATION, async (job) => {
         await processAIPlanGenerationJob(job);
     }, {
-        connection: redis,
+        ...defaultWorkerOptions,
         concurrency: 5,
+        lockDuration: 600000,
     });
     workers[exports.QUEUE_NAMES.EMAIL] = new bullmq_1.Worker(exports.QUEUE_NAMES.EMAIL, async (job) => {
         await processEmailJob(job);
     }, {
-        connection: redis,
+        ...defaultWorkerOptions,
         concurrency: 10,
     });
     workers[exports.QUEUE_NAMES.CLEANUP] = new bullmq_1.Worker(exports.QUEUE_NAMES.CLEANUP, async (job) => {
         await processCleanupJob(job);
     }, {
-        connection: redis,
+        ...defaultWorkerOptions,
         concurrency: 1,
+        lockDuration: 600000,
     });
     Object.values(workers).forEach(worker => {
         worker.on('error', (error) => {
+            if (error.message && error.message.includes('Missing lock')) {
+                logger_1.logger.debug('Worker lock error (non-critical):', error.message);
+                return;
+            }
             logger_1.logger.error('Worker error:', error);
         });
         worker.on('failed', (job, error) => {
+            if (error.message && error.message.includes('Missing lock')) {
+                logger_1.logger.debug(`Job ${job?.id} lock error (non-critical):`, error.message);
+                return;
+            }
             logger_1.logger.error(`Job ${job?.id} failed:`, error);
         });
     });
